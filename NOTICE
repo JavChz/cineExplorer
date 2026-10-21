@@ -1,0 +1,25 @@
+cineExplorer
+Copyright (c) 2026 cineExplorer Contributors
+
+This product includes software developed by third-party open-source projects:
+
+1. FFmpeg & FFprobe (https://ffmpeg.org)
+   Licensed under GNU LGPL v2.1+ / GNU GPL v2+.
+   Used via external process execution and inter-process communication.
+
+2. Phosphor Icons (https://github.com/phosphor-icons/core)
+   Copyright (c) 2020-2026 Helena Zhang & Tobias Fried.
+   Licensed under the MIT License.
+
+3. SQLite3 (https://www.sqlite.org)
+   Dedicated to the Public Domain.
+
+4. Rust Crates:
+   - eframe, egui (MIT / Apache-2.0)
+   - rusqlite (MIT)
+   - serde, serde_json (MIT / Apache-2.0)
+   - rayon, crossbeam-channel (MIT / Apache-2.0)
+   - image (MIT / Apache-2.0)
+   - walkdir, rfd, open, rodio, trash (MIT / Unlicense)
+
+For complete license texts and author credits, see THIRD_PARTY_LICENSES.md.

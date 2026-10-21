@@ -1,62 +1,59 @@
 # cineExplorer 🎬
 
-A blazing-fast, modern desktop video browser, catalog, and inspector built in **Rust** for professional video workflows.
+[![CI Build & Test](https://github.com/javch/cineExplorer/actions/workflows/ci.yml/badge.svg)](https://github.com/javch/cineExplorer/actions/workflows/ci.yml)
+[![Release Build](https://github.com/javch/cineExplorer/actions/workflows/release.yml/badge.svg)](https://github.com/javch/cineExplorer/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Rust: 1.75+](https://img.shields.io/badge/Rust-1.75%2B-orange.svg)](https://www.rust-lang.org)
+[![Platform: Windows | macOS | Linux](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)]()
 
-Designed for filmmakers, colorists, DITs, and video editors working with commercial and cinema camera formats: **MP4, MOV, BRAW (Blackmagic RAW), MKV, MXF, ProRes, H.264, H.265 (HEVC), 8-bit, 10-bit, and 12-bit deep color**.
+A blazing-fast, modern desktop video catalog, browser, and metadata inspector built in **Rust** for professional filmmaking, post-production, DIT, and color grading workflows.
+
+`cineExplorer` is engineered for commercial and cinema camera formats: **MP4, MOV, BRAW (Blackmagic RAW), MKV, MXF, ProRes, H.264, H.265 (HEVC), 8-bit, 10-bit, and 12-bit deep color**, with direct project export into **DaVinci Resolve** and **Adobe Premiere Pro**.
 
 ---
 
-## Key Features
+## Highlights
 
-### 📁 Independent SQLite Catalogs (`.cinecat`)
-- Each catalog is stored as an independent, lightweight, high-performance SQLite database.
-- Create, open, and switch between separate catalogs (e.g. per project, client, or shoot).
-- Recent catalogs list for instant switching.
-- Stores comprehensive video metadata, camera settings, tags, user ratings, color labels, production slate, and thumbnail caches.
+- 📁 **Independent SQLite Catalogs (`.cinecat`)**: Every catalog is a self-contained, lightning-fast SQLite database. Keep separate catalogs for clients, projects, or shooting days.
+- 🎞️ **Comprehensive Pro Format Support**: Native parsing for MP4, MOV, BRAW, MKV, MXF, AVI, WebM, ProRes (all profiles), H.265 / HEVC, H.264 / AVC, DNxHD/HR, AV1.
+- 🎨 **10-bit & 12-bit Deep Color Detection**: Automatic identification of 10-bit and 12-bit log and HDR material with visual badges.
+- 🚀 **Direct NLE Export with Keyword Smart Bins**: One-click export into **DaVinci Resolve** (`.fcpxml`) and **Adobe Premiere Pro** (`.xml`). User tags and technical specs automatically convert into DaVinci Resolve **Keyword Smart Bins**!
+- ⚡ **Interactive Hover Scrubbing**: Hover and glide horizontally across video cards to preview frames and timecodes in real time.
+- 📥 **High-Speed Multi-Threaded Ingestion**: Non-destructive indexing via background workers with automated duplicate detection and thumbnail caching.
+- 🔍 **Deep Technical & Slate Inspector**: Inspect codecs, profiles, frame rates, color spaces (Rec.709, Rec.2020, HDR10, HLG), audio channels, camera/lens EXIF, and edit production slate metadata (`Scene`, `Shot`, `Take`, `Reel`).
+- ⏯️ **Integrated Video Player**: Large video viewport with aspect-ratio letterboxing, frame stepping (1 frame / 10 frames), In/Out markers, and keyboard shortcuts.
 
-### 🎥 Broad Commercial & Pro Video Format Support
-- **Containers**: MP4, MOV, BRAW (Blackmagic RAW), MKV, MXF, AVI, WebM, M4V, TS, MTS.
-- **Codecs**: Apple ProRes (Proxy, LT, 422, HQ, 4444, 4444 XQ), H.265 / HEVC, H.264 / AVC, Blackmagic RAW (BRAW), Avid DNxHD/DNxHR, AV1, VP9.
-- **Bit Depths**: 8-bit, 10-bit, and 12-bit deep color detection.
-- **Color Spaces**: Rec.709, BT.2020, DCI-P3, HDR10 (PQ / SMPTE 2084), HLG.
+---
 
-### 📥 High-Speed Multi-Threaded Ingestion
-- Recursive folder scanner with duplicate detection.
-- Asynchronous metadata extraction using `ffprobe`.
-- Background thumbnail extraction via `ffmpeg` with SQLite BLOB caching.
-- Non-destructive "Link in place" cataloging.
+## Supported Video Formats & Codecs
 
-### 🗂️ Rich Visual Grid & Smart Collections
-- Hardware-accelerated virtualized card grid (powered by `egui` and `wgpu`).
-- **Interactive Hover Scrubbing**: Hover and glide horizontally across cards for instant timecode and scrub preview.
-- **Visual Badges**: Badges for 10-bit deep color, 4K+ UHD, codec (ProRes, BRAW, HEVC), frame rate, duration, and audio tracks.
-- **Smart Collections**: One-click filtering by 10-bit+, 4K+ UHD, High Frame Rate (≥50fps), ProRes, BRAW, HEVC, H.264, Camera models, Containers, and Tags.
-- **Rating & Status**: 1-5 Star ratings, Pick / Reject flags, and color labels.
+| Category | Supported Formats / Codecs |
+| :--- | :--- |
+| **Containers** | `.mp4`, `.mov`, `.braw`, `.mxf`, `.mkv`, `.avi`, `.webm`, `.m4v`, `.ts`, `.mts`, `.m2ts`, `.flv` |
+| **Video Codecs** | Apple ProRes (Proxy, LT, 422, HQ, 4444, 4444 XQ), H.265 / HEVC, H.264 / AVC, Blackmagic RAW (BRAW), Avid DNxHD/DNxHR, AV1, VP9 |
+| **Bit Depths** | 8-bit, 10-bit, 12-bit (Deep Color / HDR / RAW) |
+| **Color Spaces** | Rec.709, BT.2020, DCI-P3, HDR10 (SMPTE 2084 / PQ), HLG (ARIB STD-B67), Camera Log curves |
+| **Audio Codecs** | Linear PCM (16/24-bit), AAC, AC-3, E-AC-3, Opus, MP3, FLAC (1–8 channels) |
 
-### 🔍 Comprehensive Metadata Inspector
-- **Tech Specs**: Codec, profile, exact resolution, aspect ratio, frame rate, frame count, duration, bit depth, pixel format, color space, transfer function, and bitrate.
-- **Audio Specs**: Codec, channels, and sample rate.
-- **Camera & Lens**: Camera make/model, lens, focal length, aperture, ISO, shutter speed, white balance, and capture date.
-- **Production Slate**: Editable Scene, Shot, Take, Reel, Camera Unit, and Location fields.
-- **User Notes & Tags**: Editable notes and custom colored tags.
+---
 
-### 🎞️ Integrated Video Player & Scrubber
-- Clean cinematic player canvas with aspect-ratio letterboxing.
-- Real-time scrubbing, play/pause, in/out points, and loop toggling.
-- Frame stepping (1-frame and 10-frame step with arrow keys or J-K-L).
-- Quick launch into default external player (VLC, MPV, QuickTime, DaVinci Resolve).
+## Multi-Editor NLE Integration (DaVinci Resolve & Premiere Pro)
 
-### 🚀 Multi-Editor NLE Export (DaVinci Resolve & Premiere Pro)
-- **Direct DaVinci Resolve Interchange (`.fcpxml`)**:
-  - Generates FCPXML 1.9 files that import directly into DaVinci Resolve's Media Pool and timeline.
-  - Automatically translates user tags and technical badges (10-bit, 4K, ProRes HQ, BRAW, Camera model) into **Keyword Smart Bins** in Resolve.
-  - Transmits production slate metadata (`Scene`, `Shot`, `Take`, `Reel`, `Camera Name`) directly into Resolve's Media Pool metadata columns.
-  - Auto-launches DaVinci Resolve (`Resolve.exe`) with the newly generated export with a single click.
-- **Adobe Premiere Pro Interchange (`.xml`)**:
-  - Generates Final Cut Pro 7 XML (`<xmeml version="5">`) compatible with Adobe Premiere Pro.
-  - Creates a dedicated Bin with all media files, sequence tracks, logging info, scene/shot/take, and keyword log notes.
-- **DaVinci Resolve Media Pool Metadata (`.csv`)**:
-  - Export CSV metadata matching DaVinci Resolve's native `File > Import > Media Pool Metadata...` format.
+Instead of manually re-importing and re-tagging footage in your editor, `cineExplorer` creates ready-to-cut project files:
+
+### 1. DaVinci Resolve (`.fcpxml`)
+- Generates **FCPXML 1.9** files that load directly into DaVinci Resolve.
+- Injects `<keyword value="..."/>` tags for user tags (e.g. `Exterior`, `Drone`, `Interview`) and technical attributes (`10-bit`, `4K UHD`, `ProRes HQ`, `Sony FX3`, `Pick`).
+- **Resolve automatically creates Keyword Smart Bins** in your Media Pool, grouping your clips instantly!
+- Transmits production slate (`Scene`, `Shot`, `Take`, `Reel`, `Camera Name`) into Resolve's native Media Pool columns.
+- One-click **"🎬 Export & Open in DaVinci Resolve"** writes the file and launches Resolve automatically.
+
+### 2. Adobe Premiere Pro (`.xml`)
+- Generates **Final Cut Pro 7 XML (`<xmeml version="5">`)** compatible with Adobe Premiere Pro.
+- Creates a dedicated Bin with all media files linked, log notes containing keywords, and sequence tracks.
+
+### 3. DaVinci Resolve Media Pool Metadata (`.csv`)
+- Native CSV export formatted for Resolve's `File > Import > Media Pool Metadata...` feature.
 
 ---
 
@@ -64,78 +61,93 @@ Designed for filmmakers, colorists, DITs, and video editors working with commerc
 
 | Shortcut | Action |
 | :--- | :--- |
-| `Space` | Play / Pause |
+| `Space` | Play / Pause video |
 | `Left Arrow` | Step backward 1 frame |
 | `Right Arrow` | Step forward 1 frame |
 | `Shift + Left Arrow` | Step backward 10 frames |
 | `Shift + Right Arrow` | Step forward 10 frames |
 | `Tab` / `Double Click` | Toggle Integrated Player View |
-| `Esc` | Exit Player View / Close dialogs |
-| `1` – `5` | Set Star Rating (1 to 5) |
-| `P` | Mark as Pick |
-| `X` | Mark as Rejected |
-| `U` | Clear Pick/Reject flag |
+| `Esc` | Return to Grid View / Close modal dialogs |
+| `1` – `5` | Set Star Rating (1 to 5 stars) |
+| `P` | Mark clip as **Pick** |
+| `X` | Mark clip as **Rejected** |
+| `U` | Clear Pick/Reject flag (**Unflag**) |
 
 ---
 
-## Architecture
+## Architecture & Codebase Map
 
+For architectural details, borrow checker patterns, and development guides for AI agents or contributors, refer to [**`AGENTS.md`**](AGENTS.md).
+
+```text
+src/
+├── main.rs                 # eframe application entry point & wgpu window initialization
+├── app.rs                  # CineExplorerApp state, UI routing, shortcuts
+├── config.rs               # Persistent application settings (recent catalogs, zoom, preferences)
+├── db/
+│   ├── mod.rs              # Database connection wrapper
+│   ├── models.rs           # VideoRecord, PickFlag, SmartCollection, Tag models
+│   ├── queries.rs          # Filtering, sorting, and metadata queries
+│   └── schema.rs           # SQLite schema and migration definitions
+├── media/
+│   ├── mod.rs              # Supported extensions & Windows process configuration
+│   ├── probe.rs            # ffprobe JSON extractor for technical specs & EXIF
+│   ├── thumbnailer.rs      # ffmpeg JPEG frame extraction for thumbnail caching
+│   └── player_source.rs    # Video player frame extraction & seeking engine
+├── export/
+│   ├── mod.rs              # NLE export coordination
+│   ├── resolve_fcpxml.rs   # DaVinci Resolve FCPXML 1.9 exporter with smart keywords
+│   ├── premiere_xml.rs     # Adobe Premiere Pro FCP 7 XML exporter
+│   ├── metadata_csv.rs     # DaVinci Resolve Media Pool CSV exporter
+│   └── launcher.rs         # Local NLE detection (Resolve / Premiere) & launch engine
+├── importer.rs             # Multi-threaded background scanner & ingester
+├── playback.rs             # Video player engine & frame read-ahead
+├── thumbnails.rs           # Thumbnail texture caching & SQLite sync
+└── ui/
+    ├── theme.rs            # Cinematic dark palette, typography, badges
+    ├── widgets.rs          # Badges, star rating, pick flags, color swatches
+    ├── top_bar.rs          # Header toolbar with search, filters, zoom, export
+    ├── navigator.rs        # Sidebar smart collections, formats, codecs, tags
+    ├── grid/               # Virtualized video cards with hover scrubber
+    ├── inspector/          # Collapsible tech specs, camera EXIF, slate, notes
+    ├── player/             # Integrated video player viewport & transport controls
+    └── dialogs/            # Ingest, Catalog, Delete, and Export modal dialogs
 ```
-d:\Dev\githubprojects\cineExplorer/
-├── Cargo.toml                  # Cargo dependencies and build profiles
-├── README.md                   # Documentation
-├── .gitignore
-└── src/
-    ├── main.rs                 # eframe application entry point & wgpu window setup
-    ├── app.rs                  # Main application state, UI router, event handling
-    ├── config.rs               # Application settings & recent catalogs persistence
-    ├── db/
-    │   ├── mod.rs              # Database connection manager
-    │   ├── models.rs           # VideoRecord, PickFlag, SmartCollection, Tag models
-    │   ├── queries.rs          # SQLite CRUD, filtering, sorting, and stats
-    │   └── schema.rs           # SQLite schema and migration definitions
-    ├── media/
-    │   ├── mod.rs              # Supported video extensions and OS process config
-    │   ├── probe.rs            # ffprobe JSON extractor for tech specs and camera EXIF
-    │   ├── thumbnailer.rs      # ffmpeg JPEG frame extractor
-    │   └── player_source.rs    # Video player frame extraction and seek engine
-    ├── importer.rs             # Multi-threaded background scanner & ingester
-    ├── playback.rs             # Playhead transport and frame caching engine
-    ├── thumbnails.rs           # Thumbnail texture manager and cache worker
-    └── ui/
-        ├── mod.rs              # UI coordination
-        ├── theme.rs            # Pro dark cinematic palette & fonts
-        ├── widgets.rs          # Badges, star rating, pick flags, color swatches
-        ├── top_bar.rs          # Header toolbar with search, filters, zoom, catalog switch
-        ├── navigator.rs        # Left sidebar smart collections & tag tree
-        ├── grid/               # Virtualized video card grid
-        ├── inspector/          # Metadata inspector and production slate panel
-        ├── player/             # Integrated video player & transport scrubber
-        └── dialogs/            # Catalog, Ingest, and Delete modal dialogs
-```
 
 ---
 
-## Prerequisites
+## Installation & Build Instructions
 
-- **Rust** 1.75+ (`cargo`, `rustc`)
-- **FFmpeg & FFprobe** available in your system `PATH` (used for video inspection and frame extraction).
+### Prerequisites
+1. **Rust Toolchain**: Install Rust 1.75+ via [rustup.rs](https://rustup.rs/).
+2. **FFmpeg & FFprobe**: Ensure `ffmpeg` and `ffprobe` are installed and accessible on your system `PATH`:
+   - **Windows**: `winget install Gyan.FFmpeg` or `choco install ffmpeg`
+   - **macOS**: `brew install ffmpeg`
+   - **Linux**: `sudo apt install ffmpeg`
 
----
-
-## Build & Run
+### Build from Source
 
 ```bash
-# Debug build
+# Clone the repository
+git clone https://github.com/javch/cineExplorer.git
+cd cineExplorer
+
+# Run tests
+cargo test
+
+# Run development build
 cargo run
 
-# Optimized release build
+# Build optimized release binary
 cargo build --release
-./target/release/cine-explorer.exe
 ```
+
+The compiled release binary is located at `target/release/cine-explorer` (or `cine-explorer.exe` on Windows).
 
 ---
 
-## License
+## Open Source Compliance & Legal Notice
 
-MIT OR Apache-2.0
+`cineExplorer` is licensed under the [**MIT License**](LICENSE).
+
+This application communicates with **FFmpeg** and **FFprobe** strictly across an independent process boundary via standard operating system CLI calls and pipes, adhering to LGPL/GPL licensing boundaries without static or dynamic linking. For a complete inventory of all third-party libraries, author credits, and license disclosures, please read [**`THIRD_PARTY_LICENSES.md`**](THIRD_PARTY_LICENSES.md) and [**`NOTICE`**](NOTICE).
