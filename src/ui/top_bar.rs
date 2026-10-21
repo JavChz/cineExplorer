@@ -7,6 +7,7 @@ pub enum TopBarAction {
     OpenCatalog,
     OpenRecent(std::path::PathBuf),
     StartIngest,
+    OpenExportDialog,
     TogglePlayerView,
     ToggleInspector,
 }
@@ -84,6 +85,14 @@ pub fn render_top_bar(
             action = Some(TopBarAction::StartIngest);
         }
 
+        // Export to NLE Button
+        let export_btn = egui::Button::new(
+            RichText::new("🚀 Export to NLE...").strong().color(ACCENT_BLUE)
+        );
+        if ui.add(export_btn).on_hover_text("Export to DaVinci Resolve or Premiere Pro with Keywords").clicked() {
+            action = Some(TopBarAction::OpenExportDialog);
+        }
+
         ui.separator();
 
         // View Mode Switcher
@@ -110,7 +119,7 @@ pub fn render_top_bar(
         ui.add(
             egui::TextEdit::singleline(&mut criteria.search_query)
                 .hint_text("🔍 Search name, codec, camera, tags...")
-                .desired_width(220.0),
+                .desired_width(200.0),
         );
 
         if !criteria.search_query.is_empty() && ui.button("✖").clicked() {
@@ -148,7 +157,7 @@ pub fn render_top_bar(
                 SortField::BitDepth => "Bit Depth",
                 SortField::CameraModel => "Camera",
             })
-            .width(90.0)
+            .width(85.0)
             .show_ui(ui, |ui| {
                 ui.selectable_value(&mut criteria.sort_field, SortField::DateRecorded, "Date");
                 ui.selectable_value(&mut criteria.sort_field, SortField::ImportedAt, "Imported");

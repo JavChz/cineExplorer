@@ -21,6 +21,7 @@ pub enum InspectorAction {
     RemoveTag(String),
     PlayExternal,
     RevealInExplorer,
+    OpenExportDialog,
     DeleteVideo,
 }
 
@@ -46,12 +47,15 @@ pub fn render_inspector_content(
         ui.label(RichText::new(&video.file_name).strong().size(14.0).color(TEXT_PRIMARY));
     });
 
-    // Action buttons: Open in Player, Reveal in File Explorer
+    // Action buttons: Open in Player, Reveal in File Explorer, Export
     ui.horizontal(|ui| {
+        if ui.button("🚀 Export to NLE...").on_hover_text("Export to DaVinci Resolve or Premiere").clicked() {
+            action = Some(InspectorAction::OpenExportDialog);
+        }
         if ui.button("🎬 Play External").clicked() {
             action = Some(InspectorAction::PlayExternal);
         }
-        if ui.button("📁 Reveal in Explorer").clicked() {
+        if ui.button("📁 Reveal").clicked() {
             action = Some(InspectorAction::RevealInExplorer);
         }
     });

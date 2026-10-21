@@ -46,6 +46,18 @@ Designed for filmmakers, colorists, DITs, and video editors working with commerc
 - Frame stepping (1-frame and 10-frame step with arrow keys or J-K-L).
 - Quick launch into default external player (VLC, MPV, QuickTime, DaVinci Resolve).
 
+### 🚀 Multi-Editor NLE Export (DaVinci Resolve & Premiere Pro)
+- **Direct DaVinci Resolve Interchange (`.fcpxml`)**:
+  - Generates FCPXML 1.9 files that import directly into DaVinci Resolve's Media Pool and timeline.
+  - Automatically translates user tags and technical badges (10-bit, 4K, ProRes HQ, BRAW, Camera model) into **Keyword Smart Bins** in Resolve.
+  - Transmits production slate metadata (`Scene`, `Shot`, `Take`, `Reel`, `Camera Name`) directly into Resolve's Media Pool metadata columns.
+  - Auto-launches DaVinci Resolve (`Resolve.exe`) with the newly generated export with a single click.
+- **Adobe Premiere Pro Interchange (`.xml`)**:
+  - Generates Final Cut Pro 7 XML (`<xmeml version="5">`) compatible with Adobe Premiere Pro.
+  - Creates a dedicated Bin with all media files, sequence tracks, logging info, scene/shot/take, and keyword log notes.
+- **DaVinci Resolve Media Pool Metadata (`.csv`)**:
+  - Export CSV metadata matching DaVinci Resolve's native `File > Import > Media Pool Metadata...` format.
+
 ---
 
 ## Keyboard Shortcuts

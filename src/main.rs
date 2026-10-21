@@ -3,6 +3,7 @@
 pub mod app;
 pub mod config;
 pub mod db;
+pub mod export;
 pub mod importer;
 pub mod media;
 pub mod playback;

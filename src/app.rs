@@ -13,11 +13,13 @@ use crate::db::{
     remove_tag_from_video, update_color_label, update_flag, update_notes, update_rating,
     update_slate, Database,
 };
+use crate::export::export_and_launch;
 use crate::importer::{ImportMessage, Importer};
 use crate::playback::VideoPlayer;
 use crate::thumbnails::ThumbnailManager;
 use crate::ui::dialogs::catalog_dialog::{render_catalog_dialog, CatalogDialogResult, CatalogDialogState};
 use crate::ui::dialogs::delete_dialog::{render_delete_dialog, DeleteChoice, DeleteDialogState};
+use crate::ui::dialogs::export_dialog::{render_export_dialog, ExportDialogAction, ExportDialogState};
 use crate::ui::dialogs::ingest_dialog::{render_ingest_dialog, IngestDialogAction, IngestDialogState};
 use crate::ui::grid::{render_grid, GridAction};
 use crate::ui::inspector::render_inspector;
@@ -55,6 +57,7 @@ pub struct CineExplorerApp {
     catalog_dialog: CatalogDialogState,
     ingest_dialog: IngestDialogState,
     delete_dialog: DeleteDialogState,
+    export_dialog: ExportDialogState,
 
     // Inspector edit buffers
     edit_scene: String,
@@ -98,6 +101,7 @@ impl CineExplorerApp {
             catalog_dialog: CatalogDialogState::default(),
             ingest_dialog: IngestDialogState::default(),
             delete_dialog: DeleteDialogState::default(),
+            export_dialog: ExportDialogState::default(),
             edit_scene: String::new(),
             edit_shot: String::new(),
             edit_take: String::new(),
@@ -379,6 +383,12 @@ impl eframe::App for CineExplorerApp {
                 TopBarAction::StartIngest => {
                     self.ingest_dialog.is_open = true;
                 }
+                TopBarAction::OpenExportDialog => {
+                    self.export_dialog.selected_count = self.selected_ids.len();
+                    self.export_dialog.total_count = self.videos.len();
+                    self.export_dialog.use_selected_only = !self.selected_ids.is_empty();
+                    self.export_dialog.is_open = true;
+                }
                 TopBarAction::TogglePlayerView => {
                     if self.is_player_mode {
                         self.is_player_mode = false;
@@ -523,6 +533,12 @@ impl eframe::App for CineExplorerApp {
                                 let _ = open::that(parent);
                             }
                         }
+                    }
+                    InspectorAction::OpenExportDialog => {
+                        self.export_dialog.selected_count = self.selected_ids.len();
+                        self.export_dialog.total_count = self.videos.len();
+                        self.export_dialog.use_selected_only = !self.selected_ids.is_empty();
+                        self.export_dialog.is_open = true;
                     }
                     InspectorAction::DeleteVideo => {
                         if let Some(v) = self.selected_video().cloned() {
@@ -705,6 +721,30 @@ impl eframe::App for CineExplorerApp {
                     }
                 }
                 DeleteChoice::Cancel => {}
+            }
+        }
+
+        if let Some(exp_act) = render_export_dialog(ctx, &mut self.export_dialog) {
+            match exp_act {
+                ExportDialogAction::ExecuteExport {
+                    options,
+                    output_path,
+                    use_selected_only,
+                    ..
+                } => {
+                    let clips_to_export: Vec<VideoRecord> = if use_selected_only && !self.selected_ids.is_empty() {
+                        self.videos
+                            .iter()
+                            .filter(|v| self.selected_ids.contains(&v.id))
+                            .cloned()
+                            .collect()
+                    } else {
+                        self.videos.clone()
+                    };
+
+                    let _ = export_and_launch(&clips_to_export, output_path, &options);
+                }
+                ExportDialogAction::Cancel => {}
             }
         }
     }

@@ -201,6 +201,10 @@ pub fn render_video_card(
                 action = Some(CardAction::OpenPlayer);
                 ui.close_menu();
             }
+            if ui.button("🚀 Export to DaVinci Resolve...").clicked() {
+                action = Some(CardAction::Select(false));
+                ui.close_menu();
+            }
             if ui.button("🎬 Play in External Player").clicked() {
                 action = Some(CardAction::PlayExternal);
                 ui.close_menu();
