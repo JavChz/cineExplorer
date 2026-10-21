@@ -1,0 +1,53 @@
+[package]
+name = "cine-explorer"
+version = "0.1.0"
+edition = "2021"
+authors = ["cineExplorer Contributors"]
+description = "Professional video catalog, browser, and inspector for pro video formats (MP4, MOV, BRAW, ProRes, H.264, H.265/HEVC, 8/10/12-bit)"
+license = "MIT OR Apache-2.0"
+default-run = "cine-explorer"
+
+[dependencies]
+# UI & GPU (wgpu backend: Vulkan / DX12 / Metal — works on NVIDIA, AMD, Intel)
+eframe = { version = "0.29", default-features = false, features = [
+    "default_fonts",
+    "wgpu",
+    "wayland",
+    "x11",
+] }
+egui = "0.29"
+egui-phosphor = { version = "0.7.3", default-features = false, features = ["regular", "fill"] }
+bytemuck = { version = "1.16", features = ["derive"] }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled", "backup", "blob"] }
+
+# Serialization & Export
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Concurrency & Multi-threading
+rayon = "1.10"
+crossbeam-channel = "0.5"
+
+# File System & Utilities
+walkdir = "2.5"
+rfd = "0.15"
+open = "5.3"
+chrono = { version = "0.4", features = ["serde"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+rodio = "0.19"
+trash = "5.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+# Keep decoding and hashing fast in debug builds
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev]
+opt-level = 1

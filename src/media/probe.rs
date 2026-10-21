@@ -1,0 +1,357 @@
+use serde::Deserialize;
+use std::collections::HashMap;
+use std::path::Path;
+use std::process::Command;
+
+use crate::db::models::{PickFlag, VideoRecord};
+use super::apply_no_window;
+
+#[derive(Debug, Deserialize)]
+struct FFProbeOutput {
+    streams: Option<Vec<FFStream>>,
+    format: Option<FFFormat>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FFStream {
+    #[allow(dead_code)]
+    index: usize,
+    codec_type: Option<String>,
+    codec_name: Option<String>,
+    codec_long_name: Option<String>,
+    profile: Option<String>,
+    width: Option<u32>,
+    height: Option<u32>,
+    r_frame_rate: Option<String>,
+    avg_frame_rate: Option<String>,
+    pix_fmt: Option<String>,
+    bits_per_raw_sample: Option<String>,
+    color_space: Option<String>,
+    color_primaries: Option<String>,
+    color_transfer: Option<String>,
+    duration: Option<String>,
+    nb_frames: Option<String>,
+    bit_rate: Option<String>,
+    sample_rate: Option<String>,
+    channels: Option<u16>,
+    tags: Option<HashMap<String, String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FFFormat {
+    format_name: Option<String>,
+    duration: Option<String>,
+    size: Option<String>,
+    bit_rate: Option<String>,
+    tags: Option<HashMap<String, String>>,
+}
+
+fn parse_fraction(s: &str) -> Option<f32> {
+    let parts: Vec<&str> = s.split('/').collect();
+    if parts.len() == 2 {
+        let num: f32 = parts[0].trim().parse().ok()?;
+        let den: f32 = parts[1].trim().parse().ok()?;
+        if den > 0.0 {
+            return Some(num / den);
+        }
+    } else if let Ok(val) = s.trim().parse::<f32>() {
+        return Some(val);
+    }
+    None
+}
+
+fn detect_bit_depth(stream: &FFStream) -> u16 {
+    // 1. Direct bits_per_raw_sample
+    if let Some(ref b) = stream.bits_per_raw_sample {
+        if let Ok(val) = b.parse::<u16>() {
+            if val > 0 {
+                return val;
+            }
+        }
+    }
+
+    // 2. Pixel format check
+    if let Some(ref pf) = stream.pix_fmt {
+        let p_lower = pf.to_lowercase();
+        if p_lower.contains("12le") || p_lower.contains("12be") || p_lower.ends_with("12") {
+            return 12;
+        }
+        if p_lower.contains("10le") || p_lower.contains("10be") || p_lower.ends_with("10") {
+            return 10;
+        }
+        if p_lower.contains("14le") || p_lower.contains("14be") {
+            return 14;
+        }
+        if p_lower.contains("16le") || p_lower.contains("16be") || p_lower.ends_with("16") {
+            return 16;
+        }
+    }
+
+    // 3. Profile check (e.g. "Main 10", "High 10", ProRes HQ/4444)
+    if let Some(ref prof) = stream.profile {
+        let prof_lower = prof.to_lowercase();
+        if prof_lower.contains("10") || prof_lower.contains("prores") {
+            return 10;
+        }
+        if prof_lower.contains("12") || prof_lower.contains("4444 xq") {
+            return 12;
+        }
+    }
+
+    // 4. Codec check (BRAW is 12-bit)
+    if let Some(ref c) = stream.codec_name {
+        if c.to_lowercase().contains("braw") {
+            return 12;
+        }
+    }
+
+    8
+}
+
+pub fn probe_video_file<P: AsRef<Path>>(file_path: P) -> Result<VideoRecord, String> {
+    let path = file_path.as_ref();
+    let file_path_str = path.to_string_lossy().to_string();
+    let file_name = path.file_name().map_or("".to_string(), |s| s.to_string_lossy().to_string());
+    let extension = path.extension().map_or("".to_string(), |s| s.to_string_lossy().to_lowercase());
+
+    let mut cmd = Command::new("ffprobe");
+    cmd.arg("-v")
+        .arg("quiet")
+        .arg("-print_format")
+        .arg("json")
+        .arg("-show_format")
+        .arg("-show_streams")
+        .arg(path);
+
+    apply_no_window(&mut cmd);
+
+    let output = cmd.output().map_err(|e| format!("Failed to execute ffprobe: {}. Make sure ffmpeg/ffprobe is installed.", e))?;
+
+    if !output.status.success() {
+        return Err(format!("ffprobe failed on file '{}'", file_name));
+    }
+
+    let parsed: FFProbeOutput = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("Failed to parse ffprobe json: {}", e))?;
+
+    let streams = parsed.streams.unwrap_or_default();
+    let format = parsed.format;
+
+    // Find first video stream
+    let video_stream = streams.iter().find(|s| s.codec_type.as_deref() == Some("video"));
+    // Find first audio stream
+    let audio_stream = streams.iter().find(|s| s.codec_type.as_deref() == Some("audio"));
+
+    let file_size = format.as_ref()
+        .and_then(|f| f.size.as_ref())
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or_else(|| std::fs::metadata(path).map(|m| m.len()).unwrap_or(0));
+
+    let duration_seconds = format.as_ref()
+        .and_then(|f| f.duration.as_ref())
+        .and_then(|d| d.parse::<f32>().ok())
+        .or_else(|| video_stream.and_then(|vs| vs.duration.as_ref()).and_then(|d| d.parse::<f32>().ok()))
+        .unwrap_or(0.0);
+
+    let format_bitrate = format.as_ref()
+        .and_then(|f| f.bit_rate.as_ref())
+        .and_then(|b| b.parse::<u64>().ok())
+        .unwrap_or(0);
+
+    let container = format.as_ref()
+        .and_then(|f| f.format_name.as_ref())
+        .map(|s| {
+            let first = s.split(',').next().unwrap_or(s);
+            if first.eq_ignore_ascii_case("mov") || first.eq_ignore_ascii_case("quicktime") {
+                if extension == "braw" { "braw".to_string() } else { "mov".to_string() }
+            } else if first.eq_ignore_ascii_case("matroska") {
+                "mkv".to_string()
+            } else {
+                first.to_string()
+            }
+        })
+        .unwrap_or_else(|| extension.clone());
+
+    let mut codec = String::new();
+    let mut codec_long_name = String::new();
+    let mut profile = String::new();
+    let mut width = 0;
+    let mut height = 0;
+    let mut fps = 0.0;
+    let mut frame_count = 0;
+    let mut bit_depth = 8;
+    let mut pixel_format = String::new();
+    let mut color_space = String::new();
+    let mut color_primaries = String::new();
+    let mut color_transfer = String::new();
+    let mut video_bitrate = 0;
+
+    let mut camera_make = String::new();
+    let mut camera_model = String::new();
+    let mut lens_model = String::new();
+    let mut focal_length = String::new();
+    let mut aperture = String::new();
+    let mut iso = 0;
+    let mut shutter_speed = String::new();
+    let white_balance = String::new();
+    let mut date_recorded = None;
+
+    let mut scene = String::new();
+    let mut shot = String::new();
+    let mut take = String::new();
+    let mut reel = String::new();
+    let mut location = String::new();
+    let camera_unit = String::new();
+
+    if let Some(vs) = video_stream {
+        codec = vs.codec_name.clone().unwrap_or_default();
+        codec_long_name = vs.codec_long_name.clone().unwrap_or_default();
+        profile = vs.profile.clone().unwrap_or_default();
+        width = vs.width.unwrap_or(0);
+        height = vs.height.unwrap_or(0);
+
+        if let Some(ref r_fps) = vs.r_frame_rate {
+            fps = parse_fraction(r_fps).unwrap_or(0.0);
+        }
+        if fps <= 0.0 {
+            if let Some(ref avg_fps) = vs.avg_frame_rate {
+                fps = parse_fraction(avg_fps).unwrap_or(0.0);
+            }
+        }
+
+        if let Some(ref nb) = vs.nb_frames {
+            frame_count = nb.parse::<u32>().unwrap_or(0);
+        }
+        if frame_count == 0 && duration_seconds > 0.0 && fps > 0.0 {
+            frame_count = (duration_seconds * fps).round() as u32;
+        }
+
+        bit_depth = detect_bit_depth(vs);
+        pixel_format = vs.pix_fmt.clone().unwrap_or_default();
+        color_space = vs.color_space.clone().unwrap_or_default();
+        color_primaries = vs.color_primaries.clone().unwrap_or_default();
+        color_transfer = vs.color_transfer.clone().unwrap_or_default();
+
+        if let Some(ref br) = vs.bit_rate {
+            video_bitrate = br.parse::<u64>().unwrap_or(0);
+        }
+    }
+
+    // Extract metadata tags from format and video stream
+    let mut combined_tags: HashMap<String, String> = HashMap::new();
+    if let Some(ref f) = format {
+        if let Some(ref tags) = f.tags {
+            for (k, v) in tags {
+                combined_tags.insert(k.to_lowercase(), v.clone());
+            }
+        }
+    }
+    if let Some(vs) = video_stream {
+        if let Some(ref tags) = vs.tags {
+            for (k, v) in tags {
+                combined_tags.insert(k.to_lowercase(), v.clone());
+            }
+        }
+    }
+
+    // Parse camera tags
+    for (k, v) in &combined_tags {
+        if k.contains("make") || k.ends_with(".make") {
+            if camera_make.is_empty() { camera_make = v.clone(); }
+        } else if k.contains("model") || k.ends_with(".model") {
+            if camera_model.is_empty() { camera_model = v.clone(); }
+        } else if k.contains("lens") {
+            if lens_model.is_empty() { lens_model = v.clone(); }
+        } else if k.contains("focal") {
+            if focal_length.is_empty() { focal_length = v.clone(); }
+        } else if k.contains("aperture") || k.contains("fnumber") {
+            if aperture.is_empty() { aperture = v.clone(); }
+        } else if k.contains("iso") {
+            if iso == 0 { iso = v.parse::<u32>().unwrap_or(0); }
+        } else if k.contains("shutter") {
+            if shutter_speed.is_empty() { shutter_speed = v.clone(); }
+        } else if k.contains("scene") {
+            if scene.is_empty() { scene = v.clone(); }
+        } else if k.contains("shot") {
+            if shot.is_empty() { shot = v.clone(); }
+        } else if k.contains("take") {
+            if take.is_empty() { take = v.clone(); }
+        } else if k.contains("reel") {
+            if reel.is_empty() { reel = v.clone(); }
+        } else if k.contains("location") {
+            if location.is_empty() { location = v.clone(); }
+        } else if k.contains("creation_time") || k.contains("date") {
+            if date_recorded.is_none() { date_recorded = Some(v.clone()); }
+        }
+    }
+
+    // Fallback camera name for BRAW if not explicitly in tags
+    if extension == "braw" && camera_make.is_empty() {
+        camera_make = "Blackmagic Design".to_string();
+        if camera_model.is_empty() {
+            camera_model = "Blackmagic Camera".to_string();
+        }
+    }
+
+    // Audio specs
+    let has_audio = audio_stream.is_some();
+    let mut audio_codec = String::new();
+    let mut audio_channels = 0;
+    let mut audio_sample_rate = 0;
+
+    if let Some(as_) = audio_stream {
+        audio_codec = as_.codec_name.clone().unwrap_or_default();
+        audio_channels = as_.channels.unwrap_or(0);
+        audio_sample_rate = as_.sample_rate.as_ref().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+    }
+
+    let bitrate = if video_bitrate > 0 { video_bitrate } else { format_bitrate };
+    let imported_at = chrono::Utc::now().to_rfc3339();
+
+    Ok(VideoRecord {
+        id: 0,
+        file_path: file_path_str,
+        file_name,
+        file_size,
+        container,
+        codec,
+        codec_long_name,
+        profile,
+        width,
+        height,
+        fps,
+        frame_count,
+        duration_seconds,
+        bit_depth,
+        pixel_format,
+        color_space,
+        color_primaries,
+        color_transfer,
+        bitrate,
+        has_audio,
+        audio_codec,
+        audio_channels,
+        audio_sample_rate,
+        camera_make,
+        camera_model,
+        lens_model,
+        focal_length,
+        aperture,
+        iso,
+        shutter_speed,
+        white_balance,
+        date_recorded,
+        imported_at,
+        rating: 0,
+        flag: PickFlag::Unflagged,
+        notes: String::new(),
+        color_label: String::new(),
+        scene,
+        shot,
+        take,
+        reel,
+        location,
+        camera_unit,
+        tags: Vec::new(),
+    })
+}
