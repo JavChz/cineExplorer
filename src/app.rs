@@ -15,11 +15,13 @@ use crate::db::{
 };
 use crate::export::export_and_launch;
 use crate::importer::{ImportMessage, Importer};
+use crate::ingester::{IngestMessage, Ingester};
 use crate::playback::VideoPlayer;
 use crate::thumbnails::ThumbnailManager;
 use crate::ui::dialogs::catalog_dialog::{render_catalog_dialog, CatalogDialogResult, CatalogDialogState};
 use crate::ui::dialogs::delete_dialog::{render_delete_dialog, DeleteChoice, DeleteDialogState};
 use crate::ui::dialogs::export_dialog::{render_export_dialog, ExportDialogAction, ExportDialogState};
+use crate::ui::dialogs::import_dialog::{render_import_dialog, ImportDialogAction, ImportDialogState};
 use crate::ui::dialogs::ingest_dialog::{render_ingest_dialog, IngestDialogAction, IngestDialogState};
 use crate::ui::grid::{render_grid, GridAction};
 use crate::ui::inspector::render_inspector;
@@ -49,12 +51,15 @@ pub struct CineExplorerApp {
     active_player: Option<VideoPlayer>,
     thumb_mgr: Option<ThumbnailManager>,
 
-    // Ingest state
+    // Import & Ingest state
     import_rx: Option<Receiver<ImportMessage>>,
     import_cancel_flag: Option<Arc<AtomicBool>>,
+    ingest_rx: Option<Receiver<IngestMessage>>,
+    ingest_cancel_flag: Option<Arc<AtomicBool>>,
 
     // Dialogs
     catalog_dialog: CatalogDialogState,
+    import_dialog: ImportDialogState,
     ingest_dialog: IngestDialogState,
     delete_dialog: DeleteDialogState,
     export_dialog: ExportDialogState,
@@ -98,7 +103,10 @@ impl CineExplorerApp {
             thumb_mgr: None,
             import_rx: None,
             import_cancel_flag: None,
+            ingest_rx: None,
+            ingest_cancel_flag: None,
             catalog_dialog: CatalogDialogState::default(),
+            import_dialog: ImportDialogState::default(),
             ingest_dialog: IngestDialogState::default(),
             delete_dialog: DeleteDialogState::default(),
             export_dialog: ExportDialogState::default(),
@@ -196,8 +204,8 @@ impl CineExplorerApp {
                     .filter_map(|df| df.path.clone())
                     .collect();
                 if !paths.is_empty() {
-                    self.ingest_dialog.selected_paths = paths;
-                    self.ingest_dialog.is_open = true;
+                    self.import_dialog.selected_paths = paths;
+                    self.import_dialog.is_open = true;
                 }
             }
         });
@@ -321,26 +329,73 @@ impl eframe::App for CineExplorerApp {
             player.update(ctx);
         }
 
-        // Poll importer messages
-        let mut import_finished = false;
+        // Poll importer messages (In-Place Indexing)
+        let mut import_msgs = Vec::new();
         if let Some(ref rx) = self.import_rx {
             while let Ok(msg) = rx.try_recv() {
-                match msg {
-                    ImportMessage::Progress(prog) => {
-                        self.ingest_dialog.progress = Some(prog);
-                    }
-                    ImportMessage::Complete { .. } | ImportMessage::Cancelled { .. } => {
-                        import_finished = true;
-                    }
+                import_msgs.push(msg);
+            }
+        }
+        for msg in import_msgs {
+            match msg {
+                ImportMessage::Progress(prog) => {
+                    self.import_dialog.progress = Some(prog);
+                }
+                ImportMessage::Complete(summary) => {
+                    self.import_dialog.is_running = false;
+                    self.import_dialog.summary = Some(summary);
+                    self.import_rx = None;
+                    self.import_cancel_flag = None;
+                    self.refresh_catalog();
+                }
+                ImportMessage::Cancelled(summary) => {
+                    self.import_dialog.is_running = false;
+                    self.import_dialog.summary = Some(summary);
+                    self.import_rx = None;
+                    self.import_cancel_flag = None;
+                    self.refresh_catalog();
+                }
+                ImportMessage::Error(err) => {
+                    self.import_dialog.is_running = false;
+                    self.import_dialog.error_message = Some(err);
+                    self.import_rx = None;
+                    self.import_cancel_flag = None;
                 }
             }
         }
-        if import_finished {
-            self.ingest_dialog.is_running = false;
-            self.ingest_dialog.is_open = false;
-            self.import_rx = None;
-            self.import_cancel_flag = None;
-            self.refresh_catalog();
+
+        // Poll ingester messages (SD Card / Media Offload & Copy)
+        let mut ingest_msgs = Vec::new();
+        if let Some(ref rx) = self.ingest_rx {
+            while let Ok(msg) = rx.try_recv() {
+                ingest_msgs.push(msg);
+            }
+        }
+        for msg in ingest_msgs {
+            match msg {
+                IngestMessage::Progress(prog) => {
+                    self.ingest_dialog.progress = Some(prog);
+                }
+                IngestMessage::Complete(summary) => {
+                    self.ingest_dialog.is_running = false;
+                    self.ingest_dialog.summary = Some(summary);
+                    self.ingest_rx = None;
+                    self.ingest_cancel_flag = None;
+                    self.refresh_catalog();
+                }
+                IngestMessage::Cancelled(summary) => {
+                    self.ingest_dialog.is_running = false;
+                    self.ingest_dialog.summary = Some(summary);
+                    self.ingest_rx = None;
+                    self.ingest_cancel_flag = None;
+                    self.refresh_catalog();
+                }
+                IngestMessage::Error(_err) => {
+                    self.ingest_dialog.is_running = false;
+                    self.ingest_rx = None;
+                    self.ingest_cancel_flag = None;
+                }
+            }
         }
 
         self.handle_drag_and_drop(ctx);
@@ -382,6 +437,9 @@ impl eframe::App for CineExplorerApp {
                 }
                 TopBarAction::StartIngest => {
                     self.ingest_dialog.is_open = true;
+                }
+                TopBarAction::StartImport => {
+                    self.import_dialog.is_open = true;
                 }
                 TopBarAction::OpenExportDialog => {
                     self.export_dialog.selected_count = self.selected_ids.len();
@@ -669,15 +727,18 @@ impl eframe::App for CineExplorerApp {
             }
         }
 
-        if let Some(ing_act) = render_ingest_dialog(ctx, &mut self.ingest_dialog) {
-            match ing_act {
-                IngestDialogAction::StartIngest(paths) => {
+        // Render Import Dialog (In-Place Indexing)
+        if let Some(imp_act) = render_import_dialog(ctx, &mut self.import_dialog) {
+            match imp_act {
+                ImportDialogAction::StartImport(paths) => {
                     if let Some(ref db_path) = self.current_catalog_path {
                         let (tx, rx) = unbounded();
                         let cancel_flag = Arc::new(AtomicBool::new(false));
                         self.import_rx = Some(rx);
                         self.import_cancel_flag = Some(cancel_flag.clone());
-                        self.ingest_dialog.is_running = true;
+                        self.import_dialog.is_running = true;
+                        self.import_dialog.summary = None;
+                        self.import_dialog.error_message = None;
 
                         Importer::start(
                             paths,
@@ -688,10 +749,45 @@ impl eframe::App for CineExplorerApp {
                         );
                     }
                 }
-                IngestDialogAction::Cancel => {
+                ImportDialogAction::Cancel => {
                     if let Some(ref cancel_flag) = self.import_cancel_flag {
                         cancel_flag.store(true, Ordering::Relaxed);
                     }
+                }
+                ImportDialogAction::Done => {
+                    self.refresh_catalog();
+                }
+            }
+        }
+
+        // Render Ingest Dialog (SD Card / Media Offload & Copy)
+        if let Some(ing_act) = render_ingest_dialog(ctx, &mut self.ingest_dialog) {
+            match ing_act {
+                IngestDialogAction::StartIngest(config) => {
+                    if let Some(ref db_path) = self.current_catalog_path {
+                        let (tx, rx) = unbounded();
+                        let cancel_flag = Arc::new(AtomicBool::new(false));
+                        self.ingest_rx = Some(rx);
+                        self.ingest_cancel_flag = Some(cancel_flag.clone());
+                        self.ingest_dialog.is_running = true;
+                        self.ingest_dialog.summary = None;
+
+                        Ingester::start(
+                            config,
+                            db_path.clone(),
+                            tx,
+                            cancel_flag,
+                            ctx.clone(),
+                        );
+                    }
+                }
+                IngestDialogAction::Cancel => {
+                    if let Some(ref cancel_flag) = self.ingest_cancel_flag {
+                        cancel_flag.store(true, Ordering::Relaxed);
+                    }
+                }
+                IngestDialogAction::Done => {
+                    self.refresh_catalog();
                 }
             }
         }

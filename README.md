@@ -19,7 +19,8 @@ A blazing-fast, modern desktop video catalog, browser, and metadata inspector bu
 - 🎨 **10-bit & 12-bit Deep Color Detection**: Automatic identification of 10-bit and 12-bit log and HDR material with visual badges.
 - 🚀 **Direct NLE Export with Keyword Smart Bins**: One-click export into **DaVinci Resolve** (`.fcpxml`) and **Adobe Premiere Pro** (`.xml`). User tags and technical specs automatically convert into DaVinci Resolve **Keyword Smart Bins**!
 - ⚡ **Interactive Hover Scrubbing**: Hover and glide horizontally across video cards to preview frames and timecodes in real time.
-- 📥 **High-Speed Multi-Threaded Ingestion**: Non-destructive indexing via background workers with automated duplicate detection and thumbnail caching.
+- 📥 **SD Card & Media Ingest (Offload & Copy)**: Safely copy footage from camera cards or external media to local HDD/SSD storage with real-time transfer speeds (MB/s), ETA, duplicate detection, and immediate cataloging.
+- 📂 **In-Place Media Import (No Copying)**: Link footage already located on your permanent storage drives (HDD, SSD, or NAS) into the catalog with non-destructive, blazing-fast metadata extraction and thumbnail generation.
 - 🔍 **Deep Technical & Slate Inspector**: Inspect codecs, profiles, frame rates, color spaces (Rec.709, Rec.2020, HDR10, HLG), audio channels, camera/lens EXIF, and edit production slate metadata (`Scene`, `Shot`, `Take`, `Reel`).
 - ⏯️ **Integrated Video Player**: Large video viewport with aspect-ratio letterboxing, frame stepping (1 frame / 10 frames), In/Out markers, and keyboard shortcuts.
 
@@ -100,7 +101,8 @@ src/
 │   ├── premiere_xml.rs     # Adobe Premiere Pro FCP 7 XML exporter
 │   ├── metadata_csv.rs     # DaVinci Resolve Media Pool CSV exporter
 │   └── launcher.rs         # Local NLE detection (Resolve / Premiere) & launch engine
-├── importer.rs             # Multi-threaded background scanner & ingester
+├── importer.rs             # Multi-threaded background scanner for in-place import
+├── ingester.rs             # Multi-threaded SD card & camera media offloader and ingester
 ├── playback.rs             # Video player engine & frame read-ahead
 ├── thumbnails.rs           # Thumbnail texture caching & SQLite sync
 └── ui/
@@ -111,7 +113,7 @@ src/
     ├── grid/               # Virtualized video cards with hover scrubber
     ├── inspector/          # Collapsible tech specs, camera EXIF, slate, notes
     ├── player/             # Integrated video player viewport & transport controls
-    └── dialogs/            # Ingest, Catalog, Delete, and Export modal dialogs
+    └── dialogs/            # Ingest, Import, Catalog, Delete, and Export modal dialogs
 ```
 
 ---

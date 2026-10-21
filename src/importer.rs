@@ -18,22 +18,23 @@ pub struct ImportProgress {
     pub imported: usize,
     pub duplicates: usize,
     pub failed: usize,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportSummary {
+    pub total: usize,
+    pub imported: usize,
+    pub duplicates: usize,
+    pub failed: usize,
+    pub errors: Vec<String>,
 }
 
 pub enum ImportMessage {
     Progress(ImportProgress),
-    Complete {
-        total: usize,
-        imported: usize,
-        duplicates: usize,
-        failed: usize,
-    },
-    Cancelled {
-        total: usize,
-        imported: usize,
-        duplicates: usize,
-        failed: usize,
-    },
+    Complete(ImportSummary),
+    Cancelled(ImportSummary),
+    Error(String),
 }
 
 pub struct Importer;
@@ -49,7 +50,11 @@ impl Importer {
                     files.push(path);
                 }
             } else if path.is_dir() {
-                for entry in walkdir::WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
+                for entry in walkdir::WalkDir::new(&path)
+                    .follow_links(true)
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                {
                     let p = entry.into_path();
                     if p.is_file() && is_video_file(&p) {
                         files.push(p);
@@ -71,19 +76,58 @@ impl Importer {
         cancel_flag: Arc<AtomicBool>,
         ctx: Context,
     ) {
-        let files = Self::collect_video_files(paths);
-        let total = files.len();
-
         std::thread::spawn(move || {
+            let files = Self::collect_video_files(paths);
+            let total = files.len();
+
+            let mut errors = Vec::new();
+
+            if total == 0 {
+                errors.push("No supported video files (.mp4, .mov, .braw, .mxf, .mkv, .prores, etc.) found in the selected folder(s) or subfolders.".to_string());
+                let _ = tx.send(ImportMessage::Complete(ImportSummary {
+                    total: 0,
+                    imported: 0,
+                    duplicates: 0,
+                    failed: 0,
+                    errors,
+                }));
+                ctx.request_repaint();
+                return;
+            }
+
             let db = match Database::open(&db_path) {
                 Ok(d) => d,
-                Err(_) => {
-                    let _ = tx.send(ImportMessage::Complete {
-                        total: 0,
+                Err(e) => {
+                    let err_msg = format!("Failed to open catalog database: {}", e);
+                    let _ = tx.send(ImportMessage::Error(err_msg.clone()));
+                    let _ = tx.send(ImportMessage::Complete(ImportSummary {
+                        total,
                         imported: 0,
                         duplicates: 0,
-                        failed: 0,
-                    });
+                        failed: total,
+                        errors: vec![err_msg],
+                    }));
+                    ctx.request_repaint();
+                    return;
+                }
+            };
+
+            let conn = match db.conn() {
+                Ok(c) => {
+                    let _ = c.busy_timeout(std::time::Duration::from_secs(5));
+                    c
+                }
+                Err(e) => {
+                    let err_msg = format!("Failed to create database connection: {}", e);
+                    let _ = tx.send(ImportMessage::Error(err_msg.clone()));
+                    let _ = tx.send(ImportMessage::Complete(ImportSummary {
+                        total,
+                        imported: 0,
+                        duplicates: 0,
+                        failed: total,
+                        errors: vec![err_msg],
+                    }));
+                    ctx.request_repaint();
                     return;
                 }
             };
@@ -94,12 +138,13 @@ impl Importer {
 
             for (idx, file_path) in files.into_iter().enumerate() {
                 if cancel_flag.load(Ordering::Relaxed) {
-                    let _ = tx.send(ImportMessage::Cancelled {
+                    let _ = tx.send(ImportMessage::Cancelled(ImportSummary {
                         total,
                         imported,
                         duplicates,
                         failed,
-                    });
+                        errors,
+                    }));
                     ctx.request_repaint();
                     return;
                 }
@@ -115,18 +160,11 @@ impl Importer {
                     imported,
                     duplicates,
                     failed,
+                    last_error: errors.last().cloned(),
                 }));
                 ctx.request_repaint();
 
                 let path_str = file_path.to_string_lossy().to_string();
-
-                let conn = match db.conn() {
-                    Ok(c) => c,
-                    Err(_) => {
-                        failed += 1;
-                        continue;
-                    }
-                };
 
                 // Check duplicate
                 if file_exists(&conn, &path_str) {
@@ -147,24 +185,58 @@ impl Importer {
                                     let _ = store_thumb(&conn, new_id, &thumb_bytes);
                                 }
                             }
-                            Err(_) => {
+                            Err(db_err) => {
                                 failed += 1;
+                                let msg = format!("{}: Database error: {}", file_name, db_err);
+                                eprintln!("[cineExplorer import error] {}", msg);
+                                if errors.len() < 100 {
+                                    errors.push(msg);
+                                }
                             }
                         }
                     }
-                    Err(_) => {
+                    Err(probe_err) => {
                         failed += 1;
+                        let msg = format!("{}: {}", file_name, probe_err);
+                        eprintln!("[cineExplorer import error] {}", msg);
+                        if errors.len() < 100 {
+                            errors.push(msg);
+                        }
                     }
                 }
             }
 
-            let _ = tx.send(ImportMessage::Complete {
+            let _ = tx.send(ImportMessage::Complete(ImportSummary {
                 total,
                 imported,
                 duplicates,
                 failed,
-            });
+                errors,
+            }));
             ctx.request_repaint();
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::{create_dir_all, File};
+    use std::io::Write;
+
+    #[test]
+    fn test_collect_subfolders() {
+        let temp = std::env::temp_dir().join("cine_test_subfolders");
+        let sub = temp.join("sub1").join("sub2");
+        create_dir_all(&sub).unwrap();
+        File::create(sub.join("test.mov")).unwrap().write_all(b"123").unwrap();
+        File::create(sub.join("test.MOV")).unwrap().write_all(b"123").unwrap();
+        File::create(sub.join("._test.mov")).unwrap().write_all(b"123").unwrap(); // AppleDouble
+
+        let collected = Importer::collect_video_files(vec![temp.clone()]);
+        assert!(collected.iter().any(|p| p.file_name().unwrap() == "test.mov"));
+        assert!(!collected.iter().any(|p| p.file_name().unwrap().to_str().unwrap().starts_with("._")));
+
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }

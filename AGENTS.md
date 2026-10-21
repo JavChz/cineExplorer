@@ -110,7 +110,8 @@ d:\Dev\githubprojects\cineExplorer/
 │   │   ├── premiere_xml.rs     # FCP 7 XML generator for Premiere Pro & Resolve
 │   │   ├── metadata_csv.rs     # DaVinci Resolve Media Pool CSV exporter
 │   │   └── launcher.rs         # NLE detection (Resolve / Premiere) and execution
-│   ├── importer.rs             # Multi-threaded background crawler & video ingester
+│   ├── importer.rs             # Multi-threaded background crawler for in-place import
+│   ├── ingester.rs             # Multi-threaded SD card & camera media offloader and ingester
 │   ├── playback.rs             # Video player engine, read-ahead, and playhead sync
 │   ├── thumbnails.rs           # Thumbnail texture manager and SQLite cache sync
 │   └── ui/
@@ -122,7 +123,7 @@ d:\Dev\githubprojects\cineExplorer/
 │       ├── grid/               # Virtualized video cards with hover scrubber
 │       ├── inspector/          # Collapsible tech specs, camera EXIF, slate, notes
 │       ├── player/             # Integrated video player viewport & transport controls
-│       └── dialogs/            # Ingest, Catalog, Delete, and Export modal windows
+│       └── dialogs/            # Ingest, Import, Catalog, Delete, and Export modal windows
 ├── Cargo.toml                  # Dependencies, profiles, and package metadata
 ├── LICENSE                     # MIT License
 ├── NOTICE                      # Legal open-source attribution notice

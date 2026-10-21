@@ -7,6 +7,7 @@ pub enum TopBarAction {
     OpenCatalog,
     OpenRecent(std::path::PathBuf),
     StartIngest,
+    StartImport,
     OpenExportDialog,
     TogglePlayerView,
     ToggleInspector,
@@ -75,14 +76,25 @@ pub fn render_top_bar(
 
         // Ingest Button
         let ingest_btn = egui::Button::new(
-            RichText::new("📥 Ingest Video...")
+            RichText::new("📥 Ingest")
                 .strong()
                 .color(Color32::WHITE),
         )
         .fill(ACCENT_BLUE);
 
-        if ui.add(ingest_btn).clicked() {
+        if ui.add(ingest_btn).on_hover_text("Copy footage from SD card or camera media to local HDD/SSD storage, then catalog").clicked() {
             action = Some(TopBarAction::StartIngest);
+        }
+
+        // Import Button (In-place indexing)
+        let import_btn = egui::Button::new(
+            RichText::new("📂 Import")
+                .strong()
+                .color(TEXT_PRIMARY),
+        );
+
+        if ui.add(import_btn).on_hover_text("Index footage already stored on your HDD or SSD without copying files").clicked() {
+            action = Some(TopBarAction::StartImport);
         }
 
         // Export to NLE Button

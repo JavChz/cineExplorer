@@ -5,6 +5,7 @@ pub mod config;
 pub mod db;
 pub mod export;
 pub mod importer;
+pub mod ingester;
 pub mod media;
 pub mod playback;
 pub mod thumbnails;

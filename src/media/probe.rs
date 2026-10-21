@@ -14,8 +14,9 @@ struct FFProbeOutput {
 
 #[derive(Debug, Deserialize)]
 struct FFStream {
+    #[serde(default)]
     #[allow(dead_code)]
-    index: usize,
+    index: Option<usize>,
     codec_type: Option<String>,
     codec_name: Option<String>,
     codec_long_name: Option<String>,
@@ -33,8 +34,10 @@ struct FFStream {
     nb_frames: Option<String>,
     bit_rate: Option<String>,
     sample_rate: Option<String>,
+    #[serde(default)]
     channels: Option<u16>,
-    tags: Option<HashMap<String, String>>,
+    #[serde(default)]
+    tags: Option<HashMap<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -43,7 +46,17 @@ struct FFFormat {
     duration: Option<String>,
     size: Option<String>,
     bit_rate: Option<String>,
-    tags: Option<HashMap<String, String>>,
+    #[serde(default)]
+    tags: Option<HashMap<String, serde_json::Value>>,
+}
+
+fn json_val_to_string(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        _ => v.to_string(),
+    }
 }
 
 fn parse_fraction(s: &str) -> Option<f32> {
@@ -116,7 +129,7 @@ pub fn probe_video_file<P: AsRef<Path>>(file_path: P) -> Result<VideoRecord, Str
 
     let mut cmd = Command::new("ffprobe");
     cmd.arg("-v")
-        .arg("quiet")
+        .arg("error")
         .arg("-print_format")
         .arg("json")
         .arg("-show_format")
@@ -128,11 +141,17 @@ pub fn probe_video_file<P: AsRef<Path>>(file_path: P) -> Result<VideoRecord, Str
     let output = cmd.output().map_err(|e| format!("Failed to execute ffprobe: {}. Make sure ffmpeg/ffprobe is installed.", e))?;
 
     if !output.status.success() {
-        return Err(format!("ffprobe failed on file '{}'", file_name));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let err_desc = if !stderr.trim().is_empty() {
+            stderr.trim().to_string()
+        } else {
+            format!("ffprobe exited with exit code {:?}", output.status.code())
+        };
+        return Err(format!("ffprobe failed on '{}': {}", file_name, err_desc));
     }
 
     let parsed: FFProbeOutput = serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("Failed to parse ffprobe json: {}", e))?;
+        .map_err(|e| format!("Failed to parse ffprobe json for '{}': {}", file_name, e))?;
 
     let streams = parsed.streams.unwrap_or_default();
     let format = parsed.format;
@@ -242,14 +261,14 @@ pub fn probe_video_file<P: AsRef<Path>>(file_path: P) -> Result<VideoRecord, Str
     if let Some(ref f) = format {
         if let Some(ref tags) = f.tags {
             for (k, v) in tags {
-                combined_tags.insert(k.to_lowercase(), v.clone());
+                combined_tags.insert(k.to_lowercase(), json_val_to_string(v));
             }
         }
     }
     if let Some(vs) = video_stream {
         if let Some(ref tags) = vs.tags {
             for (k, v) in tags {
-                combined_tags.insert(k.to_lowercase(), v.clone());
+                combined_tags.insert(k.to_lowercase(), json_val_to_string(v));
             }
         }
     }

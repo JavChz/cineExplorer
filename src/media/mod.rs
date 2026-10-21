@@ -14,6 +14,12 @@ pub fn is_video_file<P: AsRef<Path>>(path: P) -> bool {
     if !p.is_file() {
         return false;
     }
+    // Ignore hidden files and macOS AppleDouble resource forks (e.g. ._video.mov, .DS_Store)
+    if let Some(file_name) = p.file_name().and_then(|s| s.to_str()) {
+        if file_name.starts_with('.') || file_name.starts_with("._") {
+            return false;
+        }
+    }
     if let Some(ext) = p.extension().and_then(|s| s.to_str()) {
         let ext_lower = ext.to_ascii_lowercase();
         SUPPORTED_EXTENSIONS.contains(&ext_lower.as_str())
