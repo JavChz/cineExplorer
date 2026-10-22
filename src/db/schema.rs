@@ -85,7 +85,6 @@ pub fn init(conn: &Connection) -> Result<bool> {
         CREATE INDEX IF NOT EXISTS idx_videos_rating ON videos(rating);
         CREATE INDEX IF NOT EXISTS idx_videos_flag ON videos(flag);
         CREATE INDEX IF NOT EXISTS idx_videos_date ON videos(date_recorded);
-        CREATE INDEX IF NOT EXISTS idx_videos_log ON videos(log_profile);
         "#,
     )?;
 

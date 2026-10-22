@@ -56,6 +56,11 @@ pub fn render_navigator(
         // SECTION: Smart Collections
         ui.label(RichText::new("SMART COLLECTIONS").small().strong().color(TEXT_MUTED));
 
+        let is_log = matches!(current_collection, SmartCollection::LogFootage);
+        if nav_item(ui, egui_phosphor::regular::PALETTE, BADGE_10BIT_FG, "Log Footage", stats.log_clips, is_log) {
+            action = Some(NavAction::SelectCollection(SmartCollection::LogFootage));
+        }
+
         let is_10bit = matches!(current_collection, SmartCollection::TenBitPlus);
         if nav_item(ui, egui_phosphor::regular::PALETTE, BADGE_10BIT_FG, "10-bit / Deep Color", stats.ten_bit_clips, is_10bit) {
             action = Some(NavAction::SelectCollection(SmartCollection::TenBitPlus));

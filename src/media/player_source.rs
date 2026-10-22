@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use egui::ColorImage;
+use crate::media::color_lut::{build_vf_filter, LogProfile};
 use super::apply_no_window;
 
 /// Calculate optimal viewport rendering dimensions, preserving aspect ratio
@@ -40,6 +41,8 @@ pub struct VideoPlayerSource {
     pub codec: String,
     pub bit_depth: u16,
     pub pixel_format: String,
+    pub log_profile: LogProfile,
+    pub apply_rec709: bool,
 }
 
 impl VideoPlayerSource {
@@ -53,6 +56,8 @@ impl VideoPlayerSource {
         codec: &str,
         bit_depth: u16,
         pixel_format: &str,
+        log_profile: LogProfile,
+        apply_rec709: bool,
     ) -> Self {
         let (render_width, render_height) = calculate_player_dimensions(width, height);
         Self {
@@ -66,7 +71,14 @@ impl VideoPlayerSource {
             codec: codec.to_lowercase(),
             bit_depth,
             pixel_format: pixel_format.to_lowercase(),
+            log_profile,
+            apply_rec709,
         }
+    }
+
+    pub fn set_log_config(&mut self, profile: LogProfile, apply_rec709: bool) {
+        self.log_profile = profile;
+        self.apply_rec709 = apply_rec709;
     }
 
     /// Check if hardware decoding is realistically supported for this codec/profile
@@ -93,6 +105,7 @@ impl VideoPlayerSource {
     pub fn extract_frame_at(&self, seconds: f32) -> Result<ColorImage, String> {
         let t = seconds.clamp(0.0, self.duration_seconds.max(0.0));
         let expected_bytes = self.render_width * self.render_height * 4;
+        let vf = build_vf_filter(self.render_width, self.render_height, self.log_profile, self.apply_rec709);
 
         if self.is_hw_accel_supported() {
             let mut cmd = Command::new("ffmpeg");
@@ -114,7 +127,7 @@ impl VideoPlayerSource {
                 .arg("-sn")
                 .arg("-dn")
                 .arg("-vf")
-                .arg(format!("scale={}:{}:flags=fast_bilinear", self.render_width, self.render_height))
+                .arg(&vf)
                 .arg("-vframes")
                 .arg("1")
                 .arg("-f")
@@ -137,10 +150,10 @@ impl VideoPlayerSource {
         }
 
         // Software fallback / direct fast decoding
-        self.extract_frame_software(t, expected_bytes)
+        self.extract_frame_software(t, expected_bytes, &vf)
     }
 
-    fn extract_frame_software(&self, t: f32, expected_bytes: usize) -> Result<ColorImage, String> {
+    fn extract_frame_software(&self, t: f32, expected_bytes: usize, vf: &str) -> Result<ColorImage, String> {
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-nostdin")
             .arg("-hide_banner")
@@ -164,7 +177,7 @@ impl VideoPlayerSource {
             .arg("-sn")
             .arg("-dn")
             .arg("-vf")
-            .arg(format!("scale={}:{}:flags=fast_bilinear", self.render_width, self.render_height))
+            .arg(vf)
             .arg("-vframes")
             .arg("1")
             .arg("-f")
@@ -190,6 +203,8 @@ impl VideoPlayerSource {
     /// Spawn a streaming FFmpeg process with hardware acceleration if supported.
     pub fn spawn_stream_hw(&self, start_seconds: f32) -> Result<Child, String> {
         let t = start_seconds.clamp(0.0, self.duration_seconds.max(0.0));
+        let vf_base = build_vf_filter(self.render_width, self.render_height, self.log_profile, self.apply_rec709);
+        let vf = format!("{}:threads=0", vf_base);
 
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-nostdin")
@@ -214,7 +229,7 @@ impl VideoPlayerSource {
             .arg("-sn")
             .arg("-dn")
             .arg("-vf")
-            .arg(format!("scale={}:{}:flags=fast_bilinear:threads=0", self.render_width, self.render_height))
+            .arg(&vf)
             .arg("-f")
             .arg("rawvideo")
             .arg("-pix_fmt")
@@ -232,6 +247,8 @@ impl VideoPlayerSource {
     /// Spawn a streaming FFmpeg process with multi-threaded CPU decoding.
     pub fn spawn_stream_sw(&self, start_seconds: f32) -> Result<Child, String> {
         let t = start_seconds.clamp(0.0, self.duration_seconds.max(0.0));
+        let vf_base = build_vf_filter(self.render_width, self.render_height, self.log_profile, self.apply_rec709);
+        let vf = format!("{}:threads=0", vf_base);
 
         let mut cmd = Command::new("ffmpeg");
         cmd.arg("-nostdin")
@@ -256,7 +273,7 @@ impl VideoPlayerSource {
             .arg("-sn")
             .arg("-dn")
             .arg("-vf")
-            .arg(format!("scale={}:{}:flags=fast_bilinear:threads=0", self.render_width, self.render_height))
+            .arg(&vf)
             .arg("-f")
             .arg("rawvideo")
             .arg("-pix_fmt")
@@ -309,16 +326,16 @@ mod tests {
 
     #[test]
     fn test_is_hw_accel_supported() {
-        let p = VideoPlayerSource::new("test.mov", 10.0, 24.0, 1920, 1080, "h264", 10, "yuv422p10le");
+        let p = VideoPlayerSource::new("test.mov", 10.0, 24.0, 1920, 1080, "h264", 10, "yuv422p10le", LogProfile::None, false);
         assert!(!p.is_hw_accel_supported());
 
-        let p2 = VideoPlayerSource::new("test.mp4", 10.0, 24.0, 1920, 1080, "h264", 8, "yuv420p");
+        let p2 = VideoPlayerSource::new("test.mp4", 10.0, 24.0, 1920, 1080, "h264", 8, "yuv420p", LogProfile::None, false);
         assert!(p2.is_hw_accel_supported());
 
-        let p3 = VideoPlayerSource::new("test.mov", 10.0, 24.0, 1920, 1080, "hevc", 10, "yuv420p10le");
+        let p3 = VideoPlayerSource::new("test.mov", 10.0, 24.0, 1920, 1080, "hevc", 10, "yuv420p10le", LogProfile::None, false);
         assert!(p3.is_hw_accel_supported());
 
-        let p4 = VideoPlayerSource::new("test.braw", 10.0, 24.0, 1920, 1080, "braw", 12, "braw");
+        let p4 = VideoPlayerSource::new("test.braw", 10.0, 24.0, 1920, 1080, "braw", 12, "braw", LogProfile::None, false);
         assert!(!p4.is_hw_accel_supported());
     }
 

@@ -428,7 +428,7 @@ impl Ingester {
                                 copied += 1;
 
                                 // Generate thumbnail and save into DB
-                                if let Ok(thumb_bytes) = extract_thumbnail(&item.dest_path, record.duration_seconds) {
+                                if let Ok(thumb_bytes) = extract_thumbnail(&item.dest_path, record.duration_seconds, Some(&record.log_profile)) {
                                     let _ = store_thumb(&conn, new_id, &thumb_bytes);
                                 }
                             }

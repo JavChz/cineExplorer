@@ -56,6 +56,7 @@ impl LogProfile {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         let l = s.trim().to_lowercase();
         if l.contains("clog3") || l.contains("c-log3") || l.contains("c-log 3") {
@@ -125,10 +126,9 @@ pub fn detect_log_profile(
     }
 
     // 3. Panasonic check
-    if make_lower.contains("panasonic") || model_lower.contains("lumix") || model_lower.contains("dc-") {
-        if transfer_lower.contains("v-log") || transfer_lower.contains("vlog") {
-            return LogProfile::PanasonicVLog;
-        }
+    if (make_lower.contains("panasonic") || model_lower.contains("lumix") || model_lower.contains("dc-"))
+        && (transfer_lower.contains("v-log") || transfer_lower.contains("vlog")) {
+        return LogProfile::PanasonicVLog;
     }
 
     // 4. Sony check
@@ -225,11 +225,12 @@ fn canon_clog_to_linear(y: f32) -> f32 {
 
 /// Convert a normalized Sony S-Log3 sample (0..1) to linear reflection
 fn sony_slog3_to_linear(y: f32) -> f32 {
-    if y >= 171.210774 / 1023.0 {
+    let cutoff = 171.210_77 / 1023.0;
+    if y >= cutoff {
         let p = (y - 420.0 / 1023.0) / (261.5 / 1023.0);
         10.0f32.powf(p) * 0.19 - 0.01
     } else {
-        (y - 95.0 / 1023.0) * (0.18 / (171.210774 / 1023.0 - 95.0 / 1023.0))
+        (y - 95.0 / 1023.0) * (0.18 / (cutoff - 95.0 / 1023.0))
     }
 }
 
@@ -555,9 +556,9 @@ mod tests {
     fn test_transform_bounds() {
         for profile in LogProfile::all_options() {
             let (r, g, b) = transform_log_to_rec709(*profile, 0.0, 0.5, 1.0);
-            assert!(r >= 0.0 && r <= 1.0);
-            assert!(g >= 0.0 && g <= 1.0);
-            assert!(b >= 0.0 && b <= 1.0);
+            assert!((0.0..=1.0).contains(&r));
+            assert!((0.0..=1.0).contains(&g));
+            assert!((0.0..=1.0).contains(&b));
         }
     }
 

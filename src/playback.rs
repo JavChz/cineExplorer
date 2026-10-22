@@ -7,6 +7,7 @@ use crossbeam_channel::{bounded, unbounded, Receiver, Sender};
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
 
 use crate::db::models::VideoRecord;
+use crate::media::color_lut::LogProfile;
 use crate::media::player_source::VideoPlayerSource;
 
 pub struct StreamFrame {
@@ -33,19 +34,24 @@ pub struct VideoPlayer {
     pub out_point: Option<f32>,
     pub current_texture: Option<TextureHandle>,
     pub is_gpu_accelerated: bool,
+    pub log_profile: LogProfile,
+    pub apply_rec709_lut: bool,
     source: VideoPlayerSource,
     ctx: Context,
     last_tick: Instant,
     stream: Option<StreamController>,
-    seek_tx: Sender<f32>,
+    seek_tx: Sender<(f32, LogProfile, bool)>,
     seek_rx: Receiver<(f32, ColorImage)>,
     last_seek_requested: f32,
 }
 
 impl VideoPlayer {
     pub fn new(clip: VideoRecord, ctx: Context) -> Self {
-        let (seek_tx, seek_req_rx) = unbounded::<f32>();
+        let (seek_tx, seek_req_rx) = unbounded::<(f32, LogProfile, bool)>();
         let (seek_res_tx, seek_rx) = unbounded::<(f32, ColorImage)>();
+
+        let log_profile = LogProfile::from_str(&clip.log_profile);
+        let apply_rec709_lut = log_profile.is_log();
 
         let source = VideoPlayerSource::new(
             &clip.file_path,
@@ -56,19 +62,24 @@ impl VideoPlayer {
             &clip.codec,
             clip.bit_depth,
             &clip.pixel_format,
+            log_profile,
+            apply_rec709_lut,
         );
 
         let is_hw = source.is_hw_accel_supported();
-        let source_seek = source.clone();
+        let mut source_seek = source.clone();
         let ctx_seek = ctx.clone();
 
         // Worker thread for responsive single-frame scrubbing and seeking
         std::thread::spawn(move || {
-            while let Ok(mut target) = seek_req_rx.recv() {
+            while let Ok(mut req) = seek_req_rx.recv() {
                 // Drain any newer requests to only decode the latest scrub target
                 while let Ok(newer) = seek_req_rx.try_recv() {
-                    target = newer;
+                    req = newer;
                 }
+
+                let (target, prof, apply_lut) = req;
+                source_seek.set_log_config(prof, apply_lut);
 
                 if let Ok(img) = source_seek.extract_frame_at(target) {
                     let _ = seek_res_tx.send((target, img));
@@ -87,6 +98,8 @@ impl VideoPlayer {
             out_point: None,
             current_texture: None,
             is_gpu_accelerated: is_hw,
+            log_profile,
+            apply_rec709_lut,
             source,
             ctx,
             last_tick: Instant::now(),
@@ -99,6 +112,31 @@ impl VideoPlayer {
         // Immediately start playback of the clip
         player.play();
         player
+    }
+
+    pub fn toggle_rec709_lut(&mut self) {
+        self.apply_rec709_lut = !self.apply_rec709_lut;
+        self.source.set_log_config(self.log_profile, self.apply_rec709_lut);
+        if self.is_playing {
+            self.start_stream(self.playhead);
+        } else {
+            self.last_seek_requested = -1.0;
+            self.request_single_frame(self.playhead);
+        }
+    }
+
+    pub fn set_log_profile(&mut self, profile: LogProfile) {
+        self.log_profile = profile;
+        if profile.is_log() {
+            self.apply_rec709_lut = true;
+        }
+        self.source.set_log_config(self.log_profile, self.apply_rec709_lut);
+        if self.is_playing {
+            self.start_stream(self.playhead);
+        } else {
+            self.last_seek_requested = -1.0;
+            self.request_single_frame(self.playhead);
+        }
     }
 
     pub fn play(&mut self) {
@@ -221,7 +259,7 @@ impl VideoPlayer {
     fn request_single_frame(&mut self, seconds: f32) {
         if (self.last_seek_requested - seconds).abs() > 0.005 {
             self.last_seek_requested = seconds;
-            let _ = self.seek_tx.send(seconds);
+            let _ = self.seek_tx.send((seconds, self.log_profile, self.apply_rec709_lut));
         }
     }
 

@@ -57,7 +57,7 @@ pub fn render_video_card(
         );
 
         // Request thumbnail if not loaded yet
-        thumb_mgr.request(video.id, &video.file_path, video.duration_seconds);
+        thumb_mgr.request(video.id, &video.file_path, video.duration_seconds, Some(&video.log_profile));
 
         // Draw thumbnail with reject dimming if rejected
         let img_tint = if video.flag == PickFlag::Rejected {
@@ -130,11 +130,12 @@ pub fn render_video_card(
             BADGE_4K_FG,
         );
 
-        // 2. Bit depth badge (Top-Right)
+        // 2. Bit depth & Log profile badges (Top-Right)
+        let mut tr_offset_x = 44.0;
         if video.bit_depth >= 10 {
             let bd_text = format!("{}-bit", video.bit_depth);
             let bd_rect = Rect::from_min_size(
-                egui::pos2(thumb_rect.max.x - 44.0, thumb_rect.min.y + 4.0),
+                egui::pos2(thumb_rect.max.x - tr_offset_x, thumb_rect.min.y + 4.0),
                 Vec2::new(40.0, 16.0),
             );
             ui.painter().rect_filled(bd_rect, Rounding::same(3.0), BADGE_10BIT_BG);
@@ -144,6 +145,25 @@ pub fn render_video_card(
                 bd_text,
                 egui::FontId::proportional(10.0),
                 BADGE_10BIT_FG,
+            );
+            tr_offset_x += 44.0;
+        }
+
+        if !video.log_profile.is_empty() && video.log_profile.to_lowercase() != "none" {
+            let short = crate::media::color_lut::LogProfile::from_str(&video.log_profile).short_name();
+            let log_text = if !short.is_empty() { short } else { &video.log_profile };
+            let width = (log_text.len() as f32 * 6.5 + 10.0).max(40.0);
+            let log_rect = Rect::from_min_size(
+                egui::pos2(thumb_rect.max.x - tr_offset_x - width + 40.0, thumb_rect.min.y + 4.0),
+                Vec2::new(width, 16.0),
+            );
+            ui.painter().rect_filled(log_rect, Rounding::same(3.0), Color32::from_rgb(45, 30, 75));
+            ui.painter().text(
+                log_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                log_text,
+                egui::FontId::proportional(10.0),
+                Color32::from_rgb(215, 175, 255),
             );
         }
 
@@ -222,6 +242,15 @@ pub fn render_video_card(
         ui.horizontal(|ui| {
             if let Some(slate) = video.slate_label() {
                 ui.label(RichText::new(slate).size(10.5).color(ACCENT_ORANGE));
+            } else if !video.camera_model.is_empty() {
+                let text = if !video.focal_length.is_empty() {
+                    format!("{} · {}", video.camera_model, video.focal_length)
+                } else if !video.lens_model.is_empty() {
+                    format!("{} · {}", video.camera_model, video.lens_model)
+                } else {
+                    format!("{} · {}", video.camera_model, video.codec_display_name())
+                };
+                ui.add(egui::Label::new(RichText::new(text).size(10.5).color(TEXT_MUTED)).truncate());
             } else {
                 let codec_str = video.codec_display_name();
                 ui.label(RichText::new(codec_str).size(10.5).color(TEXT_MUTED));

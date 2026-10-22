@@ -65,4 +65,16 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn test_open_user_catalog() {
+        let p = PathBuf::from("D:\\Dev\\githubprojects\\cineExplorer\\MyVideoCatalog.cinecat");
+        if p.exists() {
+            let db = Database::open(&p).expect("Database::open failed on existing catalog");
+            let conn = db.conn().expect("Database conn failed");
+            let stats = get_catalog_stats(&conn);
+            let videos = query_videos(&conn, &crate::db::models::FilterCriteria::default()).expect("query_videos failed");
+            assert!(videos.len() >= stats.total_clips.min(1));
+        }
+    }
 }

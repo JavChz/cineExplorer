@@ -4,6 +4,8 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::db::models::{PickFlag, VideoRecord};
+use crate::media::color_lut::detect_log_profile;
+use crate::media::container_meta::{extract_container_metadata, parse_panasonic_xml_metadata, parse_sony_xml_metadata};
 use super::apply_no_window;
 
 #[derive(Debug, Deserialize)]
@@ -212,7 +214,7 @@ pub fn probe_video_file<P: AsRef<Path>>(file_path: P) -> Result<VideoRecord, Str
     let mut aperture = String::new();
     let mut iso = 0;
     let mut shutter_speed = String::new();
-    let white_balance = String::new();
+    let mut white_balance = String::new();
     let mut date_recorded = None;
 
     let mut scene = String::new();
@@ -256,61 +258,144 @@ pub fn probe_video_file<P: AsRef<Path>>(file_path: P) -> Result<VideoRecord, Str
         }
     }
 
+    let mut raw_log_profile = None;
+
     // Extract metadata tags from format and video stream
     let mut combined_tags: HashMap<String, String> = HashMap::new();
     if let Some(ref f) = format {
         if let Some(ref tags) = f.tags {
             for (k, v) in tags {
-                combined_tags.insert(k.to_lowercase(), json_val_to_string(v));
+                let val_str = json_val_to_string(v);
+                if !val_str.trim().is_empty() {
+                    combined_tags.insert(k.to_lowercase(), val_str);
+                }
             }
         }
     }
     if let Some(vs) = video_stream {
         if let Some(ref tags) = vs.tags {
             for (k, v) in tags {
-                combined_tags.insert(k.to_lowercase(), json_val_to_string(v));
+                let val_str = json_val_to_string(v);
+                if !val_str.trim().is_empty() {
+                    combined_tags.insert(k.to_lowercase(), val_str);
+                }
             }
         }
     }
 
-    // Parse camera tags
+    // Check for embedded Panasonic Semi-Pro XML tag in ffprobe
     for (k, v) in &combined_tags {
-        if k.contains("make") || k.ends_with(".make") {
-            if camera_make.is_empty() { camera_make = v.clone(); }
-        } else if k.contains("model") || k.ends_with(".model") {
-            if camera_model.is_empty() { camera_model = v.clone(); }
-        } else if k.contains("lens") {
-            if lens_model.is_empty() { lens_model = v.clone(); }
+        if k.contains("semi-pro.metadata") || k.contains("clipmain") {
+            let mut xml_meta = crate::media::container_meta::ContainerMetadata::default();
+            parse_panasonic_xml_metadata(v, &mut xml_meta);
+            if let Some(m) = xml_meta.camera_make { if camera_make.is_empty() { camera_make = m; } }
+            if let Some(m) = xml_meta.camera_model { if camera_model.is_empty() { camera_model = m; } }
+            if let Some(i) = xml_meta.iso { if iso == 0 { iso = i; } }
+            if let Some(lp) = xml_meta.log_profile { raw_log_profile = Some(lp); }
+        }
+        if k.contains("nonrealtimemeta") {
+            let mut xml_meta = crate::media::container_meta::ContainerMetadata::default();
+            parse_sony_xml_metadata(v, &mut xml_meta);
+            if let Some(m) = xml_meta.camera_make { if camera_make.is_empty() { camera_make = m; } }
+            if let Some(m) = xml_meta.camera_model { if camera_model.is_empty() { camera_model = m; } }
+            if let Some(l) = xml_meta.lens_model { if lens_model.is_empty() { lens_model = l; } }
+            if let Some(lp) = xml_meta.log_profile { raw_log_profile = Some(lp); }
+        }
+    }
+
+    // Parse camera tags from ffprobe
+    for (k, v) in &combined_tags {
+        if k == "make" || k == "manufacturer" || k.ends_with(".make") || k.contains("com.apple.quicktime.make") {
+            if camera_make.is_empty() && !v.is_empty() { camera_make = v.clone(); }
+        } else if k == "model" || k == "camera_type" || k.ends_with(".model") || k.contains("com.apple.quicktime.model") {
+            if camera_model.is_empty() && !v.is_empty() { camera_model = v.clone(); }
+        } else if k.contains("lens") || k == "lens_type" {
+            if lens_model.is_empty() && !v.is_empty() { lens_model = v.clone(); }
         } else if k.contains("focal") {
-            if focal_length.is_empty() { focal_length = v.clone(); }
+            if focal_length.is_empty() && !v.is_empty() { focal_length = v.clone(); }
         } else if k.contains("aperture") || k.contains("fnumber") {
-            if aperture.is_empty() { aperture = v.clone(); }
-        } else if k.contains("iso") {
+            if aperture.is_empty() && !v.is_empty() { aperture = v.clone(); }
+        } else if k == "iso" || k.ends_with(".iso") {
             if iso == 0 { iso = v.parse::<u32>().unwrap_or(0); }
-        } else if k.contains("shutter") {
-            if shutter_speed.is_empty() { shutter_speed = v.clone(); }
+        } else if (k == "shutter_speed" || k == "exposure_time") && !k.contains("type") {
+            if shutter_speed.is_empty() && !v.is_empty() { shutter_speed = v.clone(); }
         } else if k.contains("scene") {
-            if scene.is_empty() { scene = v.clone(); }
-        } else if k.contains("shot") {
-            if shot.is_empty() { shot = v.clone(); }
-        } else if k.contains("take") {
-            if take.is_empty() { take = v.clone(); }
+            if scene.is_empty() && !v.is_empty() { scene = v.clone(); }
+        } else if k == "shot" || k.ends_with(".shot") {
+            if shot.is_empty() && !v.is_empty() { shot = v.clone(); }
+        } else if k.contains("take") && !k.contains("type") {
+            if take.is_empty() && !v.is_empty() { take = v.clone(); }
         } else if k.contains("reel") {
-            if reel.is_empty() { reel = v.clone(); }
+            if reel.is_empty() && !v.is_empty() { reel = v.clone(); }
         } else if k.contains("location") {
-            if location.is_empty() { location = v.clone(); }
+            if location.is_empty() && !v.is_empty() { location = v.clone(); }
+        } else if k.contains("gamma") {
+            if raw_log_profile.is_none() && !v.is_empty() { raw_log_profile = Some(v.clone()); }
         } else if (k.contains("creation_time") || k.contains("date")) && date_recorded.is_none() {
             date_recorded = Some(v.clone());
         }
     }
 
+    // Direct container metadata extraction (Canon uuid/CNTH/CNDA, Panasonic PANA/udta, Sony meta/xml, BRAW bmdf)
+    let container_info = extract_container_metadata(path);
+    if let Some(m) = container_info.camera_make {
+        if camera_make.is_empty() || camera_make.to_lowercase() == "blackmagic camera" {
+            camera_make = m;
+        }
+    }
+    if let Some(m) = container_info.camera_model {
+        if camera_model.is_empty() || camera_model.to_lowercase() == "blackmagic camera" {
+            camera_model = m;
+        }
+    }
+    if let Some(l) = container_info.lens_model {
+        if lens_model.is_empty() { lens_model = l; }
+    }
+    if let Some(fl) = container_info.focal_length {
+        if focal_length.is_empty() { focal_length = fl; }
+    }
+    if let Some(ap) = container_info.aperture {
+        if aperture.is_empty() { aperture = ap; }
+    }
+    if let Some(i) = container_info.iso {
+        if iso == 0 { iso = i; }
+    }
+    if let Some(ss) = container_info.shutter_speed {
+        if shutter_speed.is_empty() { shutter_speed = ss; }
+    }
+    if let Some(wb) = container_info.white_balance {
+        if white_balance.is_empty() { white_balance = wb; }
+    }
+    if let Some(dr) = container_info.date_recorded {
+        if date_recorded.is_none() { date_recorded = Some(dr); }
+    }
+    if let Some(lp) = container_info.log_profile {
+        if raw_log_profile.is_none() { raw_log_profile = Some(lp); }
+    }
+
     // Fallback camera name for BRAW if not explicitly in tags
-    if extension == "braw" && camera_make.is_empty() {
+    if (extension == "braw" || container.to_lowercase() == "braw") && camera_make.is_empty() {
         camera_make = "Blackmagic Design".to_string();
         if camera_model.is_empty() {
             camera_model = "Blackmagic Camera".to_string();
         }
     }
+
+    // Auto-detect Log Profile
+    let detected_profile = detect_log_profile(
+        &camera_make,
+        &camera_model,
+        raw_log_profile.as_deref(),
+        &color_transfer,
+        &codec,
+        &profile,
+        bit_depth,
+    );
+    let log_profile_str = if detected_profile.is_log() {
+        detected_profile.display_name().to_string()
+    } else {
+        String::new()
+    };
 
     // Audio specs
     let has_audio = audio_stream.is_some();
@@ -371,6 +456,32 @@ pub fn probe_video_file<P: AsRef<Path>>(file_path: P) -> Result<VideoRecord, Str
         reel,
         location,
         camera_unit,
+        log_profile: log_profile_str,
         tags: Vec::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn test_probe_real_footage() {
+        if let Ok(db) = rusqlite::Connection::open("D:\\Dev\\githubprojects\\cineExplorer\\MyVideoCatalog.cinecat") {
+            if let Ok(mut stmt) = db.prepare("SELECT id, file_name, file_path FROM videos LIMIT 3") {
+                if let Ok(rows) = stmt.query_map([], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+                }) {
+                    for r in rows.flatten() {
+                        let p = Path::new(&r.2);
+                        if p.exists() {
+                            let res = probe_video_file(p);
+                            assert!(res.is_ok(), "Probe should succeed for existing file");
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

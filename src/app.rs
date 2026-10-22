@@ -16,6 +16,7 @@ use crate::db::{
 use crate::export::export_and_launch;
 use crate::importer::ImportQueueManager;
 use crate::ingester::{IngestMessage, Ingester};
+use crate::media::color_lut::LogProfile;
 use crate::playback::VideoPlayer;
 use crate::thumbnails::ThumbnailManager;
 use crate::ui::dialogs::catalog_dialog::{render_catalog_dialog, CatalogDialogResult, CatalogDialogState};
@@ -58,6 +59,7 @@ pub struct CineExplorerApp {
     player_pending_close: bool,
     active_player: Option<VideoPlayer>,
     thumb_mgr: Option<ThumbnailManager>,
+    rescan_rx: Option<Receiver<(i64, VideoRecord)>>,
 
     // Import queue & Ingest state
     import_queue: Option<ImportQueueManager>,
@@ -114,6 +116,7 @@ impl CineExplorerApp {
             player_pending_close: false,
             active_player: None,
             thumb_mgr: None,
+            rescan_rx: None,
             import_queue: None,
             show_import_status_window: false,
             last_live_catalog_refresh: std::time::Instant::now(),
@@ -162,6 +165,16 @@ impl CineExplorerApp {
             self.last_selected_id = None;
             self.active_player = None;
             self.refresh_catalog();
+
+            // Auto-detect and re-scan clips missing camera/lens/log metadata in background
+            let missing_items: Vec<(i64, PathBuf)> = self.videos
+                .iter()
+                .filter(|v| v.camera_model.is_empty() || v.log_profile.is_empty())
+                .map(|v| (v.id, PathBuf::from(&v.file_path)))
+                .collect();
+            if !missing_items.is_empty() {
+                self.spawn_rescan(missing_items, ctx);
+            }
         }
     }
 
@@ -466,7 +479,13 @@ impl CineExplorerApp {
                     if let Some(ref mut p) = self.active_player { p.shuttle_stop(); }
                 }
                 if i.key_pressed(egui::Key::L) {
-                    if let Some(ref mut p) = self.active_player { p.shuttle_forward(); }
+                    if let Some(ref mut p) = self.active_player {
+                        if i.modifiers.alt {
+                            p.toggle_rec709_lut();
+                        } else {
+                            p.shuttle_forward();
+                        }
+                    }
                 }
 
                 // In / Out Points
@@ -656,6 +675,70 @@ impl CineExplorerApp {
             }
         }
     }
+
+    fn update_video_log_profile(&mut self, video_id: i64, profile: LogProfile) {
+        let prof_str = profile.as_str().to_string();
+        if let Some(ref db) = self.db {
+            if let Ok(conn) = db.conn() {
+                let _ = conn.execute(
+                    "UPDATE videos SET log_profile = ?1 WHERE id = ?2",
+                    rusqlite::params![prof_str, video_id],
+                );
+            }
+        }
+        if let Some(v) = self.videos.iter_mut().find(|v| v.id == video_id) {
+            v.log_profile = prof_str.clone();
+        }
+        if let Some(ref mut p) = self.active_player {
+            if p.clip.id == video_id {
+                p.clip.log_profile = prof_str;
+                p.set_log_profile(profile);
+            }
+        }
+        if let Some(ref mut tm) = self.thumb_mgr {
+            tm.invalidate(video_id);
+        }
+        self.refresh_catalog();
+    }
+
+    fn spawn_rescan(&mut self, items: Vec<(i64, PathBuf)>, ctx: &Context) {
+        if items.is_empty() {
+            return;
+        }
+        let catalog_path = match self.current_catalog_path.clone() {
+            Some(p) => p,
+            None => return,
+        };
+
+        let (tx, rx) = unbounded();
+        self.rescan_rx = Some(rx);
+        let ctx_clone = ctx.clone();
+
+        std::thread::spawn(move || {
+            for (id, path) in items {
+                if let Ok(probe) = crate::media::probe::probe_video_file(&path) {
+                    if let Ok(conn) = rusqlite::Connection::open(&catalog_path) {
+                        let _ = crate::db::queries::update_video_metadata(
+                            &conn,
+                            id,
+                            &probe.camera_make,
+                            &probe.camera_model,
+                            &probe.lens_model,
+                            &probe.focal_length,
+                            &probe.aperture,
+                            probe.iso,
+                            &probe.shutter_speed,
+                            &probe.white_balance,
+                            &probe.log_profile,
+                            probe.date_recorded.as_deref(),
+                        );
+                    }
+                    let _ = tx.send((id, probe));
+                    ctx_clone.request_repaint();
+                }
+            }
+        });
+    }
 }
 
 impl eframe::App for CineExplorerApp {
@@ -668,6 +751,50 @@ impl eframe::App for CineExplorerApp {
         // Poll video player
         if let Some(ref mut player) = self.active_player {
             player.update(ctx);
+        }
+
+        // Poll metadata rescan messages
+        let mut rescanned_items = Vec::new();
+        if let Some(ref rx) = self.rescan_rx {
+            while let Ok(msg) = rx.try_recv() {
+                rescanned_items.push(msg);
+            }
+        }
+        if !rescanned_items.is_empty() {
+            for (id, probe) in rescanned_items {
+                if let Some(v) = self.videos.iter_mut().find(|v| v.id == id) {
+                    v.camera_make = probe.camera_make.clone();
+                    v.camera_model = probe.camera_model.clone();
+                    v.lens_model = probe.lens_model.clone();
+                    v.focal_length = probe.focal_length.clone();
+                    v.aperture = probe.aperture.clone();
+                    v.iso = probe.iso;
+                    v.shutter_speed = probe.shutter_speed.clone();
+                    v.white_balance = probe.white_balance.clone();
+                    v.log_profile = probe.log_profile.clone();
+                    if let Some(ref d) = probe.date_recorded {
+                        v.date_recorded = Some(d.clone());
+                    }
+                }
+                if let Some(ref mut p) = self.active_player {
+                    if p.clip.id == id {
+                        p.clip.camera_make = probe.camera_make.clone();
+                        p.clip.camera_model = probe.camera_model.clone();
+                        p.clip.lens_model = probe.lens_model.clone();
+                        p.clip.focal_length = probe.focal_length.clone();
+                        p.clip.aperture = probe.aperture.clone();
+                        p.clip.iso = probe.iso;
+                        p.clip.shutter_speed = probe.shutter_speed.clone();
+                        p.clip.white_balance = probe.white_balance.clone();
+                        p.clip.log_profile = probe.log_profile.clone();
+                        p.set_log_profile(LogProfile::from_str(&probe.log_profile));
+                    }
+                }
+                if let Some(ref mut tm) = self.thumb_mgr {
+                    tm.invalidate(id);
+                }
+            }
+            self.refresh_catalog();
         }
 
         // Poll importer events (Background Non-Blocking Queue)
@@ -792,6 +919,21 @@ impl eframe::App for CineExplorerApp {
                 }
                 TopBarAction::FilterChanged => {
                     self.refresh_catalog();
+                }
+                TopBarAction::RescanMetadata => {
+                    let items: Vec<(i64, PathBuf)> = if !self.selected_ids.is_empty() {
+                        self.videos
+                            .iter()
+                            .filter(|v| self.selected_ids.contains(&v.id))
+                            .map(|v| (v.id, PathBuf::from(&v.file_path)))
+                            .collect()
+                    } else {
+                        self.videos
+                            .iter()
+                            .map(|v| (v.id, PathBuf::from(&v.file_path)))
+                            .collect()
+                    };
+                    self.spawn_rescan(items, ctx);
                 }
             }
         }
@@ -1009,6 +1151,15 @@ impl eframe::App for CineExplorerApp {
                             self.delete_dialog.is_open = true;
                         }
                     }
+                    InspectorAction::UpdateLogProfile(profile) => {
+                        self.update_video_log_profile(sel_id, profile);
+                    }
+                    InspectorAction::RescanMetadata(id) => {
+                        if let Some(v) = self.videos.iter().find(|v| v.id == id) {
+                            let item = vec![(id, PathBuf::from(&v.file_path))];
+                            self.spawn_rescan(item, ctx);
+                        }
+                    }
                 }
             }
         }
@@ -1104,6 +1255,18 @@ impl eframe::App for CineExplorerApp {
                 TransportAction::PlayExternal => {
                     if let Some(ref p) = self.active_player {
                         let _ = open::that(&p.clip.file_path);
+                    }
+                }
+                TransportAction::ToggleRec709Lut => {
+                    if let Some(ref mut p) = self.active_player {
+                        p.toggle_rec709_lut();
+                    }
+                }
+                TransportAction::SetLogProfile(profile) => {
+                    if let Some(ref mut p) = self.active_player {
+                        let id = p.clip.id;
+                        p.set_log_profile(profile);
+                        self.update_video_log_profile(id, profile);
                     }
                 }
             }
@@ -1309,6 +1472,7 @@ impl eframe::App for CineExplorerApp {
                             shortcut_row(ui, "Mark In / Out Point", "I / O", "Player");
                             shortcut_row(ui, "Clear In / Out Points", "Alt + X", "Player");
                             shortcut_row(ui, "Toggle Loop", "Ctrl + L", "Player");
+                            shortcut_row(ui, "Toggle Rec.709 LUT", "Alt + L", "Player");
                             shortcut_row(ui, "Next / Prev Clip", "[ / ]", "Player");
                             shortcut_row(ui, "Navigate Grid Cards", "Arrow Keys", "Grid");
                             shortcut_row(ui, "Flag as Pick / Reject / Unflag", "P / X / U", "Global (Batch)");

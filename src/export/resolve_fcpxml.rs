@@ -172,6 +172,13 @@ pub fn generate_resolve_fcpxml(videos: &[VideoRecord], options: &FcpXmlExportOpt
             if v.rating > 0 {
                 keywords.push(format!("{} Stars", v.rating));
             }
+            // Log Profile
+            if !v.log_profile.is_empty() {
+                let prof = crate::media::color_lut::LogProfile::from_str(&v.log_profile);
+                if prof.is_log() {
+                    keywords.push(prof.display_name().to_string());
+                }
+            }
         }
 
         // Write each keyword element inside ref-clip

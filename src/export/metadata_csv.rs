@@ -20,6 +20,12 @@ pub fn generate_resolve_csv(videos: &[VideoRecord]) -> String {
         if !v.camera_model.is_empty() {
             kw_list.push(v.camera_model.clone());
         }
+        if !v.log_profile.is_empty() {
+            let prof = crate::media::color_lut::LogProfile::from_str(&v.log_profile);
+            if prof.is_log() {
+                kw_list.push(prof.display_name().to_string());
+            }
+        }
 
         let good_take = match v.flag {
             PickFlag::Picked => "Yes",

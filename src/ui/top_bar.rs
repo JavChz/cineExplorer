@@ -16,6 +16,7 @@ pub enum TopBarAction {
     ToggleImportStatus,
     ShowShortcutsHelp,
     FilterChanged,
+    RescanMetadata,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -70,6 +71,11 @@ pub fn render_top_bar(
                     }
                     if ui.button(format!("{}  Open Catalog... (Ctrl+O)", egui_phosphor::regular::FOLDER_OPEN)).clicked() {
                         action = Some(TopBarAction::OpenCatalog);
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button(format!("{}  Re-scan Camera & Log Metadata", egui_phosphor::regular::ARROWS_CLOCKWISE)).clicked() {
+                        action = Some(TopBarAction::RescanMetadata);
                         ui.close_menu();
                     }
                     if !recent_catalogs.is_empty() {

@@ -10,6 +10,7 @@ struct ThumbRequest {
     video_id: i64,
     file_path: String,
     duration_seconds: f32,
+    log_profile: Option<String>,
 }
 
 struct ThumbResult {
@@ -50,7 +51,7 @@ impl ThumbnailManager {
                     Some(bytes) => bytes,
                     None => {
                         // 2. Extract with ffmpeg
-                        match extract_thumbnail(&req.file_path, req.duration_seconds) {
+                        match extract_thumbnail(&req.file_path, req.duration_seconds, req.log_profile.as_deref()) {
                             Ok(bytes) => {
                                 if let Some(ref d) = db {
                                     if let Ok(conn) = d.conn() {
@@ -103,7 +104,7 @@ impl ThumbnailManager {
         self.textures.get(&video_id)
     }
 
-    pub fn request(&mut self, video_id: i64, file_path: &str, duration_seconds: f32) {
+    pub fn request(&mut self, video_id: i64, file_path: &str, duration_seconds: f32, log_profile: Option<&str>) {
         if self.textures.contains_key(&video_id) || self.in_flight.contains(&video_id) {
             return;
         }
@@ -112,7 +113,13 @@ impl ThumbnailManager {
             video_id,
             file_path: file_path.to_string(),
             duration_seconds,
+            log_profile: log_profile.map(|s| s.to_string()),
         });
+    }
+
+    pub fn invalidate(&mut self, video_id: i64) {
+        self.textures.remove(&video_id);
+        self.in_flight.remove(&video_id);
     }
 
     pub fn clear(&mut self) {

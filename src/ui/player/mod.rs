@@ -39,6 +39,51 @@ pub fn render_player_view(
                 );
             }
 
+            // Log Profile and Rec.709 LUT Controls
+            let is_log = player.log_profile.is_log();
+            if is_log {
+                let badge_text = format!("{} {}", egui_phosphor::regular::PALETTE, player.log_profile.short_name());
+                ui.label(RichText::new(badge_text).small().strong().color(BADGE_10BIT_FG));
+
+                let (lut_icon, lut_color, lut_text) = if player.apply_rec709_lut {
+                    (egui_phosphor::fill::CHECK_CIRCLE, ACCENT_GREEN, "Rec.709")
+                } else {
+                    (egui_phosphor::regular::CIRCLE, ACCENT_ORANGE, "Raw Log")
+                };
+                let lut_btn = egui::Button::new(
+                    RichText::new(format!("{} {}", lut_icon, lut_text)).small().strong().color(lut_color),
+                );
+                let tooltip = if player.apply_rec709_lut {
+                    "Rec.709 3D LUT is Active (Alt+L) — click to view ungraded Log"
+                } else {
+                    "Raw Log displayed (Alt+L) — click to apply Rec.709 LUT"
+                };
+                if ui.add(lut_btn).on_hover_text(tooltip).clicked() {
+                    action = Some(TransportAction::ToggleRec709Lut);
+                }
+            }
+
+            // Profile selector dropdown
+            let profile_label = if is_log {
+                player.log_profile.short_name()
+            } else {
+                "SDR"
+            };
+            egui::ComboBox::from_id_salt("player_log_profile_select")
+                .selected_text(
+                    RichText::new(profile_label)
+                        .small()
+                        .color(if is_log { ACCENT_BLUE } else { TEXT_MUTED }),
+                )
+                .show_ui(ui, |ui| {
+                    for opt in crate::media::color_lut::LogProfile::all_options() {
+                        let is_sel = player.log_profile == *opt;
+                        if ui.selectable_label(is_sel, opt.display_name()).clicked() {
+                            action = Some(TransportAction::SetLogProfile(*opt));
+                        }
+                    }
+                });
+
             if player.is_gpu_accelerated {
                 ui.label(
                     RichText::new(format!("{} GPU Accelerated", egui_phosphor::regular::LIGHTNING))

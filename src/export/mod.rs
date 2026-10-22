@@ -144,6 +144,7 @@ mod tests {
             iso: 800,
             shutter_speed: "1/50".to_string(),
             white_balance: "5600K".to_string(),
+            log_profile: "sony_slog3".to_string(),
             date_recorded: Some("2026-05-10T14:30:00Z".to_string()),
             imported_at: "2026-05-10T16:00:00Z".to_string(),
             rating: 5,
@@ -173,6 +174,7 @@ mod tests {
         assert!(xml.contains("<keyword start=\"0s\" duration=\"10.0100s\" value=\"10-bit\"/>"));
         assert!(xml.contains("<keyword start=\"0s\" duration=\"10.0100s\" value=\"ProRes HQ\"/>"));
         assert!(xml.contains("<keyword start=\"0s\" duration=\"10.0100s\" value=\"Sony FX3\"/>"));
+        assert!(xml.contains("<keyword start=\"0s\" duration=\"10.0100s\" value=\"Sony S-Log3\"/>"));
         assert!(xml.contains("<keyword start=\"0s\" duration=\"10.0100s\" value=\"Pick\"/>"));
         assert!(xml.contains("<md key=\"com.apple.proapps.studio.scene\" value=\"4B\"/>"));
         assert!(xml.contains("<md key=\"com.apple.proapps.studio.take\" value=\"3\"/>"));
@@ -188,7 +190,7 @@ mod tests {
         assert!(xml.contains("<pathurl>file://localhost/D:/Footage/A001_C001.mov</pathurl>"));
         assert!(xml.contains("<scene>4B</scene>"));
         assert!(xml.contains("<good>TRUE</good>"));
-        assert!(xml.contains("<lognote>Keywords: Exterior, Day, 10-bit, 4K UHD, ProRes HQ, Sony FX3</lognote>"));
+        assert!(xml.contains("<lognote>Keywords: Exterior, Day, 10-bit, 4K UHD, ProRes HQ, Sony FX3, Sony S-Log3</lognote>"));
     }
 
     #[test]
@@ -198,6 +200,6 @@ mod tests {
 
         assert!(csv.starts_with("File Name,File Path,Reel Name,Scene,Shot,Take,Good Take,Clip Color,Keywords"));
         assert!(csv.contains("A001_C001.mov,D:\\Footage\\A001_C001.mov,A001,4B,1,3,Yes,orange"));
-        assert!(csv.contains("\"Exterior, Day, 10-bit, 4K UHD, ProRes HQ, Sony FX3\""));
+        assert!(csv.contains("\"Exterior, Day, 10-bit, 4K UHD, ProRes HQ, Sony FX3, Sony S-Log3\""));
     }
 }

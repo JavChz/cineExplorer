@@ -267,7 +267,7 @@ impl Importer {
                                 record.id = new_id;
                                 imported += 1;
 
-                                if let Ok(thumb_bytes) = extract_thumbnail(&file_path, record.duration_seconds) {
+                                if let Ok(thumb_bytes) = extract_thumbnail(&file_path, record.duration_seconds, Some(&record.log_profile)) {
                                     let _ = store_thumb(&conn, new_id, &thumb_bytes);
                                 }
                             }
@@ -513,7 +513,7 @@ impl ImportQueueManager {
                                     record.id = new_id;
                                     imported += 1;
 
-                                    if let Ok(thumb_bytes) = extract_thumbnail(&file_path, record.duration_seconds) {
+                                    if let Ok(thumb_bytes) = extract_thumbnail(&file_path, record.duration_seconds, Some(&record.log_profile)) {
                                         let _ = store_thumb(&conn, new_id, &thumb_bytes);
                                     }
 

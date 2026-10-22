@@ -1,5 +1,6 @@
 use egui::{Color32, Rect, RichText, Rounding, Stroke, Ui, Vec2};
 use crate::db::models::PickFlag;
+use crate::media::color_lut::LogProfile;
 use crate::playback::VideoPlayer;
 use crate::ui::theme::*;
 use crate::ui::widgets::*;
@@ -24,6 +25,8 @@ pub enum TransportAction {
     NextClip,
     ClosePlayer,
     PlayExternal,
+    ToggleRec709Lut,
+    SetLogProfile(LogProfile),
 }
 
 pub fn render_transport_bar(
@@ -159,6 +162,26 @@ pub fn render_transport_bar(
                 if (player.playback_rate - 1.0).abs() > 0.1 {
                     let speed_str = format!("{:.1}x", player.playback_rate);
                     ui.label(RichText::new(speed_str).small().strong().color(ACCENT_ORANGE));
+                }
+
+                // Log Profile / Rec.709 LUT quick toggle pill
+                if player.log_profile.is_log() {
+                    let lut_icon = if player.apply_rec709_lut {
+                        egui_phosphor::fill::EYE
+                    } else {
+                        egui_phosphor::regular::EYE_SLASH
+                    };
+                    let lut_color = if player.apply_rec709_lut { ACCENT_GREEN } else { ACCENT_ORANGE };
+                    let lut_text = if player.apply_rec709_lut { "Rec.709" } else { "Raw Log" };
+                    let btn = ui.small_button(RichText::new(format!("{} {}", lut_icon, lut_text)).color(lut_color))
+                        .on_hover_text(if player.apply_rec709_lut {
+                            "Rec.709 3D LUT Active (Alt+L) — click to view raw Log"
+                        } else {
+                            "Viewing Raw Ungraded Log (Alt+L) — click to apply Rec.709 LUT"
+                        });
+                    if btn.clicked() {
+                        action = Some(TransportAction::ToggleRec709Lut);
+                    }
                 }
             });
 

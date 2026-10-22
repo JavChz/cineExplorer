@@ -24,6 +24,8 @@ pub enum InspectorAction {
     RevealInExplorer,
     OpenExportDialog,
     DeleteVideo,
+    UpdateLogProfile(crate::media::color_lut::LogProfile),
+    RescanMetadata(i64),
 }
 
 #[allow(clippy::too_many_arguments, clippy::ptr_arg)]
@@ -255,7 +257,7 @@ pub fn render_inspector_content(
     // SECTION 6: Camera & Shooting Info
     let cam_header = format!("{} Camera & Lens", egui_phosphor::regular::CAMERA);
     egui::CollapsingHeader::new(RichText::new(cam_header).strong().size(12.5))
-        .default_open(false)
+        .default_open(true)
         .show(ui, |ui| {
             if !video.camera_make.is_empty() {
                 spec_row(ui, "Make", &video.camera_make);
@@ -278,8 +280,42 @@ pub fn render_inspector_content(
             if !video.shutter_speed.is_empty() {
                 spec_row(ui, "Shutter", &video.shutter_speed);
             }
+            if !video.white_balance.is_empty() {
+                spec_row(ui, "White Balance", &video.white_balance);
+            }
             if let Some(ref d) = video.date_recorded {
                 spec_row(ui, "Date Recorded", d);
+            }
+
+            // Log / Color Profile Selector
+            let current_prof = crate::media::color_lut::LogProfile::from_str(&video.log_profile);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Color Profile").color(TEXT_MUTED).size(11.0));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    egui::ComboBox::from_id_salt(format!("inspector_log_prof_{}", video.id))
+                        .selected_text(
+                            RichText::new(current_prof.display_name())
+                                .strong()
+                                .color(if current_prof.is_log() { ACCENT_BLUE } else { TEXT_PRIMARY })
+                                .size(11.0),
+                        )
+                        .show_ui(ui, |ui| {
+                            for opt in crate::media::color_lut::LogProfile::all_options() {
+                                let is_sel = current_prof == *opt;
+                                if ui.selectable_label(is_sel, opt.display_name()).clicked() {
+                                    action = Some(InspectorAction::UpdateLogProfile(*opt));
+                                }
+                            }
+                        });
+                });
+            });
+
+            ui.add_space(4.0);
+            if ui.button(RichText::new(format!("{} Re-scan Camera Metadata", egui_phosphor::regular::ARROWS_CLOCKWISE)).small())
+                .on_hover_text("Re-read camera make/model, lens, white balance, and Log profile from source file")
+                .clicked()
+            {
+                action = Some(InspectorAction::RescanMetadata(video.id));
             }
         });
 

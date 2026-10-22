@@ -482,6 +482,7 @@ pub fn query_videos(conn: &Connection, criteria: &FilterCriteria) -> Result<Vec<
             reel: row.get(40)?,
             location: row.get(41)?,
             camera_unit: row.get(42)?,
+            log_profile: row.get(43)?,
             tags: Vec::new(),
         })
     })?;
@@ -514,7 +515,8 @@ pub fn get_catalog_stats(conn: &Connection) -> CatalogStats {
             COALESCE(SUM(CASE WHEN LOWER(codec) LIKE '%braw%' OR LOWER(container) = 'braw' THEN 1 ELSE 0 END), 0),
             COALESCE(SUM(CASE WHEN LOWER(codec) LIKE '%prores%' OR LOWER(profile) LIKE '%prores%' THEN 1 ELSE 0 END), 0),
             COALESCE(SUM(CASE WHEN LOWER(codec) IN ('hevc', 'h265') THEN 1 ELSE 0 END), 0),
-            COALESCE(SUM(CASE WHEN LOWER(codec) IN ('h264', 'avc') THEN 1 ELSE 0 END), 0)
+            COALESCE(SUM(CASE WHEN LOWER(codec) IN ('h264', 'avc') THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN log_profile != '' AND LOWER(log_profile) != 'none' THEN 1 ELSE 0 END), 0)
         FROM videos
         "#,
         [],
@@ -533,6 +535,7 @@ pub fn get_catalog_stats(conn: &Connection) -> CatalogStats {
             stats.prores_clips = row.get::<_, i64>(11)? as usize;
             stats.h265_clips = row.get::<_, i64>(12)? as usize;
             stats.h264_clips = row.get::<_, i64>(13)? as usize;
+            stats.log_clips = row.get::<_, i64>(14)? as usize;
             Ok(())
         },
     );

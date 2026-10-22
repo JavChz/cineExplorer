@@ -54,6 +54,7 @@ fn read_u32(buf: &[u8], offset: usize, le: bool) -> Option<u32> {
 }
 
 /// Parse a rational number (numerator, denominator) into a clean string representation
+#[allow(dead_code)]
 fn format_rational(num: u32, den: u32) -> Option<String> {
     if den == 0 {
         return None;
@@ -61,7 +62,7 @@ fn format_rational(num: u32, den: u32) -> Option<String> {
     if num == 0 {
         return Some("0".to_string());
     }
-    if num % den == 0 {
+    if num.is_multiple_of(den) {
         Some((num / den).to_string())
     } else {
         Some(format!("{:.1}", num as f64 / den as f64))
@@ -75,7 +76,7 @@ fn format_shutter_speed(num: u32, den: u32) -> Option<String> {
     }
     if num == 1 {
         Some(format!("1/{}s", den))
-    } else if den % num == 0 {
+    } else if den.is_multiple_of(num) {
         Some(format!("1/{}s", den / num))
     } else {
         let sec = num as f64 / den as f64;
@@ -155,7 +156,7 @@ fn parse_tiff_block(buf: &[u8], tiff_start: usize, meta: &mut ContainerMetadata)
 
     let mut exif_ifd_offset = None;
     let mut makernote_offset = None;
-    let mut makernote_size = 0;
+    let mut _makernote_size = 0;
 
     // 1. Parse IFD0
     let ifd0_pos = tiff_start + ifd0_offset;
@@ -247,10 +248,8 @@ fn parse_tiff_block(buf: &[u8], tiff_start: usize, meta: &mut ContainerMetadata)
                                 if iso_val > 0 {
                                     meta.iso = Some(iso_val);
                                 }
-                            } else if tag_type == 4 {
-                                if val_or_offset > 0 {
-                                    meta.iso = Some(val_or_offset);
-                                }
+                            } else if tag_type == 4 && val_or_offset > 0 {
+                                meta.iso = Some(val_or_offset);
                             }
                         }
                     }
@@ -282,7 +281,7 @@ fn parse_tiff_block(buf: &[u8], tiff_start: usize, meta: &mut ContainerMetadata)
                     0x927C => {
                         // MakerNote pointer
                         makernote_offset = Some(val_or_offset as usize);
-                        makernote_size = count as usize;
+                        _makernote_size = count as usize;
                     }
                     _ => {}
                 }
@@ -335,38 +334,36 @@ fn parse_tiff_block(buf: &[u8], tiff_start: usize, meta: &mut ContainerMetadata)
                                     if meta.white_balance.is_none() && tag_type == 3 && count >= 10 {
                                         let p = tiff_start + val_or_offset as usize + 9 * 2;
                                         if let Some(kelvin) = read_u16(buf, p, le) {
-                                            if kelvin >= 2000 && kelvin <= 15000 {
+                                            if (2000..=15000).contains(&kelvin) {
                                                 meta.white_balance = Some(format!("{}K", kelvin));
                                             }
                                         }
                                     }
                                 }
-                                0x4026 => {
+                                0x4026 if tag_type == 4 && count >= 12 => {
                                     // CanonLogInfo (Array of U32)
                                     // Index 3: CanonLog Mode (1 = ON, 0 = OFF)
                                     // Index 11: CanonLog Curve (1 = C-Log, 2 = C-Log2, 3 = C-Log3)
                                     // Index 9: Color Space / Gamut (1 = BT.709, 2 = BT.2020, 3 = Cinema Gamut)
-                                    if tag_type == 4 && count >= 12 {
-                                        let p = tiff_start + val_or_offset as usize;
-                                        let is_log_on = read_u32(buf, p + 3 * 4, le).unwrap_or(0);
-                                        let curve_type = read_u32(buf, p + 11 * 4, le).unwrap_or(0);
-                                        let gamut_type = read_u32(buf, p + 9 * 4, le).unwrap_or(0);
+                                    let p = tiff_start + val_or_offset as usize;
+                                    let is_log_on = read_u32(buf, p + 3 * 4, le).unwrap_or(0);
+                                    let curve_type = read_u32(buf, p + 11 * 4, le).unwrap_or(0);
+                                    let gamut_type = read_u32(buf, p + 9 * 4, le).unwrap_or(0);
 
-                                        if is_log_on == 1 {
-                                            let profile_name = match curve_type {
-                                                2 => "Canon C-Log2",
-                                                3 => "Canon C-Log3",
-                                                _ => "Canon C-Log",
-                                            };
-                                            meta.log_profile = Some(profile_name.to_string());
+                                    if is_log_on == 1 {
+                                        let profile_name = match curve_type {
+                                            2 => "Canon C-Log2",
+                                            3 => "Canon C-Log3",
+                                            _ => "Canon C-Log",
+                                        };
+                                        meta.log_profile = Some(profile_name.to_string());
 
-                                            let gamut_name = match gamut_type {
-                                                2 => "BT.2020",
-                                                3 => "Cinema Gamut",
-                                                _ => "BT.709",
-                                            };
-                                            meta.color_gamut = Some(gamut_name.to_string());
-                                        }
+                                        let gamut_name = match gamut_type {
+                                            2 => "BT.2020",
+                                            3 => "Cinema Gamut",
+                                            _ => "BT.709",
+                                        };
+                                        meta.color_gamut = Some(gamut_name.to_string());
                                     }
                                 }
                                 _ => {}
@@ -593,7 +590,7 @@ fn parse_braw_bmdf_packet(buf: &[u8], meta: &mut ContainerMetadata) {
             if let Some(idx) = chunk.windows(4).position(|w| w == b"wkel") {
                 if idx + 8 <= chunk.len() {
                     let kelvin = u32::from_be_bytes([chunk[idx + 4], chunk[idx + 5], chunk[idx + 6], chunk[idx + 7]]);
-                    if kelvin >= 2000 && kelvin <= 20000 {
+                    if (2000..=20000).contains(&kelvin) {
                         meta.white_balance = Some(format!("{}K", kelvin));
                     }
                 }

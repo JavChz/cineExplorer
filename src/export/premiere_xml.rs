@@ -119,6 +119,12 @@ pub fn generate_premiere_xml(videos: &[VideoRecord], options: &PremiereXmlExport
             if !v.camera_model.is_empty() {
                 kw_list.push(v.camera_model.clone());
             }
+            if !v.log_profile.is_empty() {
+                let prof = crate::media::color_lut::LogProfile::from_str(&v.log_profile);
+                if prof.is_log() {
+                    kw_list.push(prof.display_name().to_string());
+                }
+            }
             let lognote = format!("Keywords: {}", kw_list.join(", "));
             out.push_str(&format!("                      <lognote>{}</lognote>\n", xml_escape(&lognote)));
         }
