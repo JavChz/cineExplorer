@@ -176,9 +176,15 @@ pub fn render_ingest_dialog(
 
                 ui.separator();
 
-                if ui.button("Cancel Ingest").clicked() {
-                    action = Some(IngestDialogAction::Cancel);
-                }
+                ui.horizontal(|ui| {
+                    if ui.button("Hide / Run in Background").on_hover_text("Keep offloading in background and return to catalog").clicked() {
+                        state.is_open = false;
+                    }
+
+                    if ui.button(RichText::new("Cancel Ingest").color(ACCENT_RED)).clicked() {
+                        action = Some(IngestDialogAction::Cancel);
+                    }
+                });
             }
             // 2. SUMMARY PHASE
             else if let Some(ref summary) = state.summary {

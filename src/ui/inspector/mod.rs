@@ -5,6 +5,7 @@ use crate::db::models::VideoRecord;
 use crate::thumbnails::ThumbnailManager;
 use sections::{render_inspector_content, InspectorAction};
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_inspector(
     ui: &mut Ui,
     selected_video: Option<&VideoRecord>,

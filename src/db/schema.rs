@@ -1,6 +1,6 @@
 use rusqlite::{Connection, Result};
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 /// Initialize database tables for a cineExplorer catalog
 pub fn init(conn: &Connection) -> Result<bool> {
@@ -49,7 +49,8 @@ pub fn init(conn: &Connection) -> Result<bool> {
             take TEXT NOT NULL DEFAULT '',
             reel TEXT NOT NULL DEFAULT '',
             location TEXT NOT NULL DEFAULT '',
-            camera_unit TEXT NOT NULL DEFAULT ''
+            camera_unit TEXT NOT NULL DEFAULT '',
+            log_profile TEXT NOT NULL DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS tags (
@@ -84,11 +85,15 @@ pub fn init(conn: &Connection) -> Result<bool> {
         CREATE INDEX IF NOT EXISTS idx_videos_rating ON videos(rating);
         CREATE INDEX IF NOT EXISTS idx_videos_flag ON videos(flag);
         CREATE INDEX IF NOT EXISTS idx_videos_date ON videos(date_recorded);
+        CREATE INDEX IF NOT EXISTS idx_videos_log ON videos(log_profile);
         "#,
     )?;
 
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap_or(0);
-    if version < SCHEMA_VERSION {
+    if version < 2 {
+        // Safe additive migration for log_profile
+        let _ = conn.execute("ALTER TABLE videos ADD COLUMN log_profile TEXT NOT NULL DEFAULT ''", []);
+        let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_videos_log ON videos(log_profile)", []);
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }
 

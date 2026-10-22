@@ -7,22 +7,12 @@ pub enum DeleteChoice {
     Cancel,
 }
 
+#[derive(Default)]
 pub struct DeleteDialogState {
     pub is_open: bool,
     pub video_id: i64,
     pub file_path: String,
     pub file_name: String,
-}
-
-impl Default for DeleteDialogState {
-    fn default() -> Self {
-        Self {
-            is_open: false,
-            video_id: 0,
-            file_path: String::new(),
-            file_name: String::new(),
-        }
-    }
 }
 
 pub fn render_delete_dialog(ctx: &egui::Context, state: &mut DeleteDialogState) -> Option<DeleteChoice> {

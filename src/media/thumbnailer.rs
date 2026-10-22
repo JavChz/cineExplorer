@@ -8,7 +8,7 @@ pub fn extract_thumbnail<P: AsRef<Path>>(file_path: P, duration_seconds: f32) ->
 
     // Pick timestamp: 1.0s or 15% into the video, avoid black start frames
     let seek_time = if duration_seconds > 2.0 {
-        (duration_seconds * 0.15).min(5.0).max(1.0)
+        (duration_seconds * 0.15).clamp(1.0, 5.0)
     } else if duration_seconds > 0.2 {
         duration_seconds * 0.5
     } else {

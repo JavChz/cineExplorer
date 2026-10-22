@@ -72,6 +72,7 @@ pub struct VideoRecord {
     pub reel: String,
     pub location: String,
     pub camera_unit: String,
+    pub log_profile: String,
     pub tags: Vec<String>,
 }
 
@@ -227,16 +228,23 @@ pub struct CatalogStats {
     pub total_clips: usize,
     pub total_size_bytes: u64,
     pub total_duration_seconds: f64,
+    pub picks_clips: usize,
+    pub rejected_clips: usize,
+    pub unflagged_clips: usize,
+    pub favorites_clips: usize,
     pub ten_bit_clips: usize,
     pub four_k_clips: usize,
+    pub hfr_clips: usize,
     pub braw_clips: usize,
     pub prores_clips: usize,
     pub h265_clips: usize,
     pub h264_clips: usize,
+    pub log_clips: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SortField {
+    #[default]
     DateRecorded,
     ImportedAt,
     FileName,
@@ -248,19 +256,22 @@ pub enum SortField {
     CameraModel,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SortDirection {
     Ascending,
+    #[default]
     Descending,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum SmartCollection {
+    #[default]
     All,
     Picks,
     Rejected,
     Unflagged,
     Favorites,   // 4+ or 5 stars
+    LogFootage,  // Log profile detected
     TenBitPlus,  // >= 10-bit
     FourKPlus,   // >= 3840 width
     HighFrameRate, // >= 50 fps
@@ -275,12 +286,6 @@ pub enum SmartCollection {
     Folder(String),
 }
 
-impl Default for SmartCollection {
-    fn default() -> Self {
-        SmartCollection::All
-    }
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct FilterCriteria {
     pub search_query: String,
@@ -290,16 +295,4 @@ pub struct FilterCriteria {
     pub color_filter: Option<String>,
     pub sort_field: SortField,
     pub sort_dir: SortDirection,
-}
-
-impl Default for SortField {
-    fn default() -> Self {
-        SortField::DateRecorded
-    }
-}
-
-impl Default for SortDirection {
-    fn default() -> Self {
-        SortDirection::Descending
-    }
 }

@@ -1,3 +1,5 @@
+pub mod color_lut;
+pub mod container_meta;
 pub mod player_source;
 pub mod probe;
 pub mod thumbnailer;

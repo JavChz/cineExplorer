@@ -67,6 +67,8 @@ Instead of manually re-importing and re-tagging footage in your editor, `cineExp
 | `Right Arrow` | Step forward 1 frame |
 | `Shift + Left Arrow` | Step backward 10 frames |
 | `Shift + Right Arrow` | Step forward 10 frames |
+| `G` | Return to **Grid View** (Lightroom standard) |
+| `E` | Open **Player / Loupe View** for selected clip (Lightroom standard) |
 | `Tab` / `Double Click` | Toggle Integrated Player View |
 | `Esc` | Return to Grid View / Close modal dialogs |
 | `1` – `5` | Set Star Rating (1 to 5 stars) |

@@ -31,6 +31,7 @@ pub const BADGE_BRAW_FG: Color32 = Color32::from_rgb(245, 80, 100);
 pub fn apply_theme(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Fill);
     ctx.set_fonts(fonts);
 
     let mut visuals = Visuals::dark();

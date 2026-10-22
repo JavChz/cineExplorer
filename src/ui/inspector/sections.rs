@@ -5,6 +5,7 @@ use crate::ui::theme::*;
 use crate::ui::widgets::*;
 
 pub enum InspectorAction {
+    OpenPlayer(Box<VideoRecord>),
     UpdateRating(u8),
     UpdateFlag(PickFlag),
     UpdateColor(String),
@@ -25,6 +26,7 @@ pub enum InspectorAction {
     DeleteVideo,
 }
 
+#[allow(clippy::too_many_arguments, clippy::ptr_arg)]
 pub fn render_inspector_content(
     ui: &mut Ui,
     video: &VideoRecord,
@@ -40,30 +42,47 @@ pub fn render_inspector_content(
 ) -> Option<InspectorAction> {
     let mut action = None;
 
-    ui.spacing_mut().item_spacing.y = 8.0;
+    ui.spacing_mut().item_spacing.y = 7.0;
 
-    // Header Title
+    // Header Title & Action Buttons
     ui.horizontal(|ui| {
-        ui.label(RichText::new(&video.file_name).strong().size(14.0).color(TEXT_PRIMARY));
+        ui.label(
+            RichText::new(&video.file_name)
+                .strong()
+                .size(13.5)
+                .color(TEXT_PRIMARY),
+        );
     });
 
-    // Action buttons: Open in Player, Reveal in File Explorer, Export
     ui.horizontal(|ui| {
-        if ui.button("🚀 Export to NLE...").on_hover_text("Export to DaVinci Resolve or Premiere").clicked() {
+        let play_btn = egui::Button::new(
+            RichText::new(format!("{} Player", egui_phosphor::regular::PLAY))
+                .size(11.5)
+                .color(Color32::WHITE),
+        )
+        .fill(ACCENT_BLUE);
+
+        if ui.add(play_btn).on_hover_text("Open in Integrated Player (Enter)").clicked() {
+            action = Some(InspectorAction::OpenPlayer(Box::new(video.clone())));
+        }
+
+        if ui.button(RichText::new(format!("{} Export", egui_phosphor::regular::EXPORT)).size(11.5)).on_hover_text("Export to NLE").clicked() {
             action = Some(InspectorAction::OpenExportDialog);
         }
-        if ui.button("🎬 Play External").clicked() {
+
+        if ui.button(RichText::new(format!("{} Ext", egui_phosphor::regular::ARROW_SQUARE_OUT)).size(11.5)).on_hover_text("Play in Default OS Player").clicked() {
             action = Some(InspectorAction::PlayExternal);
         }
-        if ui.button("📁 Reveal").clicked() {
+
+        if ui.button(RichText::new(format!("{} Reveal", egui_phosphor::regular::FOLDER_OPEN)).size(11.5)).on_hover_text("Show in Explorer").clicked() {
             action = Some(InspectorAction::RevealInExplorer);
         }
     });
 
-    // Large Poster Preview
+    // Poster Preview (clickable to open in player)
     let poster_w = ui.available_width().max(160.0);
     let poster_h = poster_w * (9.0 / 16.0);
-    let (poster_rect, _) = ui.allocate_exact_size(Vec2::new(poster_w, poster_h), egui::Sense::hover());
+    let (poster_rect, poster_resp) = ui.allocate_exact_size(Vec2::new(poster_w, poster_h), egui::Sense::click());
 
     if let Some(tex) = thumb_mgr.get_texture(video.id) {
         ui.painter().image(
@@ -76,11 +95,137 @@ pub fn render_inspector_content(
         ui.painter().rect_filled(poster_rect, Rounding::same(4.0), Color32::from_rgb(25, 27, 34));
     }
 
+    if poster_resp.hovered() {
+        ui.painter().rect_filled(poster_rect, Rounding::same(4.0), Color32::from_black_alpha(80));
+        ui.painter().text(
+            poster_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            egui_phosphor::fill::PLAY,
+            egui::FontId::proportional(28.0),
+            Color32::WHITE,
+        );
+        poster_resp.show_tooltip_text("Click to open in player");
+    }
+
+    if poster_resp.clicked() {
+        action = Some(InspectorAction::OpenPlayer(Box::new(video.clone())));
+    }
+
     ui.separator();
 
-    // SECTION 1: Video Tech Specs
-    egui::CollapsingHeader::new(RichText::new("📹 Video Tech Specs").strong())
+    // SECTION 1: Ratings & Flags (Top priority for editors)
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Rating:").small().color(TEXT_MUTED));
+        let mut rating = video.rating;
+        if rating_stars(ui, &mut rating) {
+            action = Some(InspectorAction::UpdateRating(rating));
+        }
+
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let mut flag = video.flag;
+            if flag_picker(ui, &mut flag) {
+                action = Some(InspectorAction::UpdateFlag(flag));
+            }
+            ui.label(RichText::new("Flag:").small().color(TEXT_MUTED));
+        });
+    });
+
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Color Label:").small().color(TEXT_MUTED));
+        let mut color = video.color_label.clone();
+        if color_label_picker(ui, &mut color) {
+            action = Some(InspectorAction::UpdateColor(color));
+        }
+    });
+
+    ui.separator();
+
+    // SECTION 2: Production Slate (Editable)
+    let slate_header = format!("{} Slate & Production", egui_phosphor::regular::FILM_SLATE);
+    egui::CollapsingHeader::new(RichText::new(slate_header).strong().size(12.5))
         .default_open(true)
+        .show(ui, |ui| {
+            let mut slate_changed = false;
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Scene:").size(11.0).color(TEXT_MUTED));
+                if ui.add(egui::TextEdit::singleline(edit_scene).desired_width(55.0)).changed() { slate_changed = true; }
+
+                ui.label(RichText::new("Shot:").size(11.0).color(TEXT_MUTED));
+                if ui.add(egui::TextEdit::singleline(edit_shot).desired_width(55.0)).changed() { slate_changed = true; }
+
+                ui.label(RichText::new("Take:").size(11.0).color(TEXT_MUTED));
+                if ui.add(egui::TextEdit::singleline(edit_take).desired_width(45.0)).changed() { slate_changed = true; }
+            });
+
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Reel:").size(11.0).color(TEXT_MUTED));
+                if ui.add(egui::TextEdit::singleline(edit_reel).desired_width(60.0)).changed() { slate_changed = true; }
+
+                ui.label(RichText::new("Location:").size(11.0).color(TEXT_MUTED));
+                if ui.add(egui::TextEdit::singleline(edit_location).desired_width(ui.available_width())).changed() { slate_changed = true; }
+            });
+
+            if slate_changed {
+                action = Some(InspectorAction::UpdateSlate {
+                    scene: edit_scene.clone(),
+                    shot: edit_shot.clone(),
+                    take: edit_take.clone(),
+                    reel: edit_reel.clone(),
+                    location: edit_location.clone(),
+                    camera_unit: edit_unit.clone(),
+                });
+            }
+        });
+
+    ui.separator();
+
+    // SECTION 3: Tags & Keywords
+    let tags_header = format!("{} Tags & Keywords", egui_phosphor::regular::TAG);
+    egui::CollapsingHeader::new(RichText::new(tags_header).strong().size(12.5))
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for tag in &video.tags {
+                    ui.horizontal(|ui| {
+                        badge(ui, tag, ACCENT_BLUE, Color32::WHITE);
+                        if ui.small_button("×").clicked() {
+                            action = Some(InspectorAction::RemoveTag(tag.clone()));
+                        }
+                    });
+                }
+            });
+
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(new_clip_tag).hint_text("Add tag...").desired_width(120.0));
+                if ui.button("+").clicked() && !new_clip_tag.trim().is_empty() {
+                    action = Some(InspectorAction::AddTag(new_clip_tag.trim().to_string()));
+                    new_clip_tag.clear();
+                }
+            });
+        });
+
+    ui.separator();
+
+    // SECTION 4: Notes
+    let notes_header = format!("{} Notes", egui_phosphor::regular::NOTE_PENCIL);
+    egui::CollapsingHeader::new(RichText::new(notes_header).strong().size(12.5))
+        .default_open(true)
+        .show(ui, |ui| {
+            if ui.add(
+                egui::TextEdit::multiline(edit_notes)
+                    .desired_rows(3)
+                    .desired_width(ui.available_width()),
+            ).changed() {
+                action = Some(InspectorAction::UpdateNotes(edit_notes.clone()));
+            }
+        });
+
+    ui.separator();
+
+    // SECTION 5: Video Tech Specs
+    let tech_header = format!("{} Video Tech Specs", egui_phosphor::regular::FILM_STRIP);
+    egui::CollapsingHeader::new(RichText::new(tech_header).strong().size(12.5))
+        .default_open(false)
         .show(ui, |ui| {
             spec_row(ui, "Container", &video.container.to_uppercase());
             spec_row(ui, "Codec", &video.codec_display_name());
@@ -107,24 +252,10 @@ pub fn render_inspector_content(
 
     ui.separator();
 
-    // SECTION 2: Audio Specs
-    egui::CollapsingHeader::new(RichText::new("🔊 Audio Specs").strong())
-        .default_open(true)
-        .show(ui, |ui| {
-            if video.has_audio {
-                spec_row(ui, "Audio Codec", &video.audio_codec.to_uppercase());
-                spec_row(ui, "Channels", &format!("{} ch", video.audio_channels));
-                spec_row(ui, "Sample Rate", &format!("{} Hz", video.audio_sample_rate));
-            } else {
-                ui.label(RichText::new("No Audio Track").color(TEXT_MUTED));
-            }
-        });
-
-    ui.separator();
-
-    // SECTION 3: Camera & Shooting Info
-    egui::CollapsingHeader::new(RichText::new("📷 Camera & Lens").strong())
-        .default_open(true)
+    // SECTION 6: Camera & Shooting Info
+    let cam_header = format!("{} Camera & Lens", egui_phosphor::regular::CAMERA);
+    egui::CollapsingHeader::new(RichText::new(cam_header).strong().size(12.5))
+        .default_open(false)
         .show(ui, |ui| {
             if !video.camera_make.is_empty() {
                 spec_row(ui, "Make", &video.camera_make);
@@ -154,109 +285,17 @@ pub fn render_inspector_content(
 
     ui.separator();
 
-    // SECTION 4: Production Slate (Editable)
-    egui::CollapsingHeader::new(RichText::new("🎬 Slate Metadata").strong())
-        .default_open(true)
+    // SECTION 7: Audio Specs
+    let audio_header = format!("{} Audio Specs", egui_phosphor::regular::SPEAKER_HIGH);
+    egui::CollapsingHeader::new(RichText::new(audio_header).strong().size(12.5))
+        .default_open(false)
         .show(ui, |ui| {
-            let mut slate_changed = false;
-            ui.horizontal(|ui| {
-                ui.label("Scene:");
-                if ui.text_edit_singleline(edit_scene).changed() { slate_changed = true; }
-                ui.label("Shot:");
-                if ui.text_edit_singleline(edit_shot).changed() { slate_changed = true; }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Take:");
-                if ui.text_edit_singleline(edit_take).changed() { slate_changed = true; }
-                ui.label("Reel:");
-                if ui.text_edit_singleline(edit_reel).changed() { slate_changed = true; }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Location:");
-                if ui.text_edit_singleline(edit_location).changed() { slate_changed = true; }
-            });
-
-            if slate_changed {
-                action = Some(InspectorAction::UpdateSlate {
-                    scene: edit_scene.clone(),
-                    shot: edit_shot.clone(),
-                    take: edit_take.clone(),
-                    reel: edit_reel.clone(),
-                    location: edit_location.clone(),
-                    camera_unit: edit_unit.clone(),
-                });
-            }
-        });
-
-    ui.separator();
-
-    // SECTION 5: Ratings & Flags
-    egui::CollapsingHeader::new(RichText::new("⭐ Rating & Status").strong())
-        .default_open(true)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Rating:");
-                let mut rating = video.rating;
-                if rating_stars(ui, &mut rating) {
-                    action = Some(InspectorAction::UpdateRating(rating));
-                }
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("Flag:");
-                let mut flag = video.flag;
-                if flag_picker(ui, &mut flag) {
-                    action = Some(InspectorAction::UpdateFlag(flag));
-                }
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("Color:");
-                let mut color = video.color_label.clone();
-                if color_label_picker(ui, &mut color) {
-                    action = Some(InspectorAction::UpdateColor(color));
-                }
-            });
-        });
-
-    ui.separator();
-
-    // SECTION 6: Tags
-    egui::CollapsingHeader::new(RichText::new("🏷️ Tags").strong())
-        .default_open(true)
-        .show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for tag in &video.tags {
-                    ui.horizontal(|ui| {
-                        badge(ui, tag, ACCENT_BLUE, Color32::WHITE);
-                        if ui.small_button("×").clicked() {
-                            action = Some(InspectorAction::RemoveTag(tag.clone()));
-                        }
-                    });
-                }
-            });
-
-            ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(new_clip_tag).hint_text("Add tag...").desired_width(120.0));
-                if ui.button("+").clicked() && !new_clip_tag.trim().is_empty() {
-                    action = Some(InspectorAction::AddTag(new_clip_tag.trim().to_string()));
-                    new_clip_tag.clear();
-                }
-            });
-        });
-
-    ui.separator();
-
-    // SECTION 7: Notes
-    egui::CollapsingHeader::new(RichText::new("📝 Notes").strong())
-        .default_open(true)
-        .show(ui, |ui| {
-            if ui.add(
-                egui::TextEdit::multiline(edit_notes)
-                    .desired_rows(3)
-                    .desired_width(ui.available_width()),
-            ).changed() {
-                action = Some(InspectorAction::UpdateNotes(edit_notes.clone()));
+            if video.has_audio {
+                spec_row(ui, "Audio Codec", &video.audio_codec.to_uppercase());
+                spec_row(ui, "Channels", &format!("{} ch", video.audio_channels));
+                spec_row(ui, "Sample Rate", &format!("{} Hz", video.audio_sample_rate));
+            } else {
+                ui.label(RichText::new("No Audio Track").color(TEXT_MUTED));
             }
         });
 
@@ -265,9 +304,9 @@ pub fn render_inspector_content(
 
 fn spec_row(ui: &mut Ui, label: &str, val: &str) {
     ui.horizontal(|ui| {
-        ui.label(RichText::new(label).color(TEXT_MUTED).size(11.5));
+        ui.label(RichText::new(label).color(TEXT_MUTED).size(11.0));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(RichText::new(val).strong().color(TEXT_PRIMARY).size(11.5));
+            ui.label(RichText::new(val).strong().color(TEXT_PRIMARY).size(11.0));
         });
     });
 }

@@ -299,8 +299,8 @@ pub fn probe_video_file<P: AsRef<Path>>(file_path: P) -> Result<VideoRecord, Str
             if reel.is_empty() { reel = v.clone(); }
         } else if k.contains("location") {
             if location.is_empty() { location = v.clone(); }
-        } else if k.contains("creation_time") || k.contains("date") {
-            if date_recorded.is_none() { date_recorded = Some(v.clone()); }
+        } else if (k.contains("creation_time") || k.contains("date")) && date_recorded.is_none() {
+            date_recorded = Some(v.clone());
         }
     }
 

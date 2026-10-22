@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use crossbeam_channel::{unbounded, Receiver};
-use egui::{CentralPanel, Context, SidePanel, TopBottomPanel};
+use egui::{CentralPanel, Context, RichText, SidePanel, TopBottomPanel, Vec2};
 
 use crate::config::AppConfig;
 use crate::db::models::{CatalogStats, FilterCriteria, PickFlag, Tag, VideoRecord};
@@ -14,14 +14,17 @@ use crate::db::{
     update_slate, Database,
 };
 use crate::export::export_and_launch;
-use crate::importer::{ImportMessage, Importer};
+use crate::importer::ImportQueueManager;
 use crate::ingester::{IngestMessage, Ingester};
 use crate::playback::VideoPlayer;
 use crate::thumbnails::ThumbnailManager;
 use crate::ui::dialogs::catalog_dialog::{render_catalog_dialog, CatalogDialogResult, CatalogDialogState};
 use crate::ui::dialogs::delete_dialog::{render_delete_dialog, DeleteChoice, DeleteDialogState};
 use crate::ui::dialogs::export_dialog::{render_export_dialog, ExportDialogAction, ExportDialogState};
-use crate::ui::dialogs::import_dialog::{render_import_dialog, ImportDialogAction, ImportDialogState};
+use crate::ui::dialogs::import_dialog::{
+    render_import_dialog, render_import_status_window, ImportDialogAction, ImportDialogState,
+    ImportStatusAction,
+};
 use crate::ui::dialogs::ingest_dialog::{render_ingest_dialog, IngestDialogAction, IngestDialogState};
 use crate::ui::grid::{render_grid, GridAction};
 use crate::ui::inspector::render_inspector;
@@ -29,8 +32,9 @@ use crate::ui::inspector::sections::InspectorAction;
 use crate::ui::navigator::{render_navigator, NavAction};
 use crate::ui::player::render_player_view;
 use crate::ui::player::transport::TransportAction;
-use crate::ui::theme::apply_theme;
+use crate::ui::theme::*;
 use crate::ui::top_bar::{render_top_bar, TopBarAction};
+use crate::ui::widgets::kbd_pill;
 
 pub struct CineExplorerApp {
     config: AppConfig,
@@ -38,6 +42,7 @@ pub struct CineExplorerApp {
     current_catalog_path: Option<PathBuf>,
     videos: Vec<VideoRecord>,
     selected_ids: HashSet<i64>,
+    last_selected_id: Option<i64>,
     stats: CatalogStats,
     containers: Vec<(String, usize)>,
     codecs: Vec<(String, usize)>,
@@ -46,14 +51,18 @@ pub struct CineExplorerApp {
     tags: Vec<Tag>,
     filter: FilterCriteria,
     card_width: f32,
+    show_navigator: bool,
     show_inspector: bool,
+    show_shortcuts_modal: bool,
     is_player_mode: bool,
+    player_pending_close: bool,
     active_player: Option<VideoPlayer>,
     thumb_mgr: Option<ThumbnailManager>,
 
-    // Import & Ingest state
-    import_rx: Option<Receiver<ImportMessage>>,
-    import_cancel_flag: Option<Arc<AtomicBool>>,
+    // Import queue & Ingest state
+    import_queue: Option<ImportQueueManager>,
+    show_import_status_window: bool,
+    last_live_catalog_refresh: std::time::Instant,
     ingest_rx: Option<Receiver<IngestMessage>>,
     ingest_cancel_flag: Option<Arc<AtomicBool>>,
 
@@ -89,6 +98,7 @@ impl CineExplorerApp {
             current_catalog_path: None,
             videos: Vec::new(),
             selected_ids: HashSet::new(),
+            last_selected_id: None,
             stats: CatalogStats::default(),
             containers: Vec::new(),
             codecs: Vec::new(),
@@ -97,12 +107,16 @@ impl CineExplorerApp {
             tags: Vec::new(),
             filter: FilterCriteria::default(),
             card_width,
+            show_navigator: true,
             show_inspector: true,
+            show_shortcuts_modal: false,
             is_player_mode: false,
+            player_pending_close: false,
             active_player: None,
             thumb_mgr: None,
-            import_rx: None,
-            import_cancel_flag: None,
+            import_queue: None,
+            show_import_status_window: false,
+            last_live_catalog_refresh: std::time::Instant::now(),
             ingest_rx: None,
             ingest_cancel_flag: None,
             catalog_dialog: CatalogDialogState::default(),
@@ -140,10 +154,12 @@ impl CineExplorerApp {
     pub fn open_catalog(&mut self, path: PathBuf, ctx: &Context) {
         if let Ok(db) = Database::open(&path) {
             self.thumb_mgr = Some(ThumbnailManager::new(path.clone(), ctx.clone()));
+            self.import_queue = Some(ImportQueueManager::new(path.clone(), ctx.clone()));
             self.db = Some(db);
             self.current_catalog_path = Some(path.clone());
             self.config.add_recent_catalog(path);
             self.selected_ids.clear();
+            self.last_selected_id = None;
             self.active_player = None;
             self.refresh_catalog();
         }
@@ -197,6 +213,21 @@ impl CineExplorerApp {
         self.videos.iter().find(|v| v.id == *first_id)
     }
 
+    fn current_clip_index(&self) -> (usize, usize) {
+        let total = self.videos.len();
+        if let Some(ref p) = self.active_player {
+            if let Some(pos) = self.videos.iter().position(|v| v.id == p.clip.id) {
+                return (pos, total);
+            }
+        }
+        if let Some(id) = self.selected_ids.iter().next() {
+            if let Some(pos) = self.videos.iter().position(|v| v.id == *id) {
+                return (pos, total);
+            }
+        }
+        (0, total)
+    }
+
     fn handle_drag_and_drop(&mut self, ctx: &Context) {
         ctx.input(|i| {
             if !i.raw.dropped_files.is_empty() {
@@ -204,67 +235,323 @@ impl CineExplorerApp {
                     .filter_map(|df| df.path.clone())
                     .collect();
                 if !paths.is_empty() {
-                    self.import_dialog.selected_paths = paths;
-                    self.import_dialog.is_open = true;
+                    if let Some(ref mut queue) = self.import_queue {
+                        queue.enqueue(paths, None);
+                        self.show_import_status_window = true;
+                    } else {
+                        self.import_dialog.selected_paths = paths;
+                        self.import_dialog.is_open = true;
+                    }
                 }
             }
         });
     }
 
+    fn open_player(&mut self, record: VideoRecord, ctx: &Context) {
+        self.player_pending_close = false;
+        self.selected_ids.clear();
+        self.selected_ids.insert(record.id);
+        self.last_selected_id = Some(record.id);
+        self.active_player = Some(VideoPlayer::new(record, ctx.clone()));
+        self.is_player_mode = true;
+        self.sync_inspector_buffers();
+    }
+
+    fn close_player(&mut self) {
+        if let Some(ref mut p) = self.active_player {
+            p.pause();
+        }
+        self.is_player_mode = false;
+        self.player_pending_close = true;
+    }
+
+    fn next_player_clip(&mut self, ctx: &Context) {
+        if self.videos.is_empty() {
+            return;
+        }
+        let cur_id = self.active_player.as_ref().map(|p| p.clip.id).or_else(|| self.selected_ids.iter().next().copied());
+        let next_idx = match cur_id {
+            Some(id) => {
+                if let Some(pos) = self.videos.iter().position(|v| v.id == id) {
+                    (pos + 1) % self.videos.len()
+                } else {
+                    0
+                }
+            }
+            None => 0,
+        };
+        let next_vid = self.videos[next_idx].clone();
+        self.open_player(next_vid, ctx);
+    }
+
+    fn prev_player_clip(&mut self, ctx: &Context) {
+        if self.videos.is_empty() {
+            return;
+        }
+        let cur_id = self.active_player.as_ref().map(|p| p.clip.id).or_else(|| self.selected_ids.iter().next().copied());
+        let prev_idx = match cur_id {
+            Some(id) => {
+                if let Some(pos) = self.videos.iter().position(|v| v.id == id) {
+                    if pos == 0 { self.videos.len() - 1 } else { pos - 1 }
+                } else {
+                    0
+                }
+            }
+            None => 0,
+        };
+        let prev_vid = self.videos[prev_idx].clone();
+        self.open_player(prev_vid, ctx);
+    }
+
+    fn navigate_grid(&mut self, delta: isize, ctx: &Context) {
+        if self.videos.is_empty() {
+            return;
+        }
+        let cur_idx = self.selected_ids.iter().next()
+            .and_then(|id| self.videos.iter().position(|v| v.id == *id))
+            .unwrap_or(0) as isize;
+
+        let next_idx = (cur_idx + delta).clamp(0, (self.videos.len() - 1) as isize) as usize;
+        let vid_id = self.videos[next_idx].id;
+        self.selected_ids.clear();
+        self.selected_ids.insert(vid_id);
+        self.last_selected_id = Some(vid_id);
+        self.sync_inspector_buffers();
+
+        if self.is_player_mode {
+            let vid = self.videos[next_idx].clone();
+            self.open_player(vid, ctx);
+        }
+    }
+
+    fn select_range(&mut self, target_id: i64) {
+        let last_id = self.last_selected_id.unwrap_or(target_id);
+        let start_pos = self.videos.iter().position(|v| v.id == last_id);
+        let end_pos = self.videos.iter().position(|v| v.id == target_id);
+
+        if let (Some(s), Some(e)) = (start_pos, end_pos) {
+            let (min_idx, max_idx) = if s < e { (s, e) } else { (e, s) };
+            for v in &self.videos[min_idx..=max_idx] {
+                self.selected_ids.insert(v.id);
+            }
+        } else {
+            self.selected_ids.insert(target_id);
+        }
+        self.last_selected_id = Some(target_id);
+        self.sync_inspector_buffers();
+    }
+
     fn handle_keyboard_shortcuts(&mut self, ctx: &Context) {
+        let text_focused = ctx.wants_keyboard_input();
+
         ctx.input(|i| {
-            // Space: play/pause
+            // Global shortcuts that work even when typing
+            if i.key_pressed(egui::Key::Escape) {
+                if self.show_shortcuts_modal {
+                    self.show_shortcuts_modal = false;
+                } else if self.is_player_mode {
+                    self.close_player();
+                } else if !self.selected_ids.is_empty() {
+                    self.selected_ids.clear();
+                    self.sync_inspector_buffers();
+                }
+                return;
+            }
+
+            // Command / Ctrl key shortcuts
+            let cmd = i.modifiers.command || i.modifiers.ctrl;
+            if cmd {
+                // Ctrl+A: Select All
+                if i.key_pressed(egui::Key::A) && !text_focused {
+                    for v in &self.videos {
+                        self.selected_ids.insert(v.id);
+                    }
+                    self.sync_inspector_buffers();
+                }
+                // Ctrl+D: Deselect All
+                if i.key_pressed(egui::Key::D) && !text_focused {
+                    self.selected_ids.clear();
+                    self.sync_inspector_buffers();
+                }
+                // Ctrl+O: Open Catalog
+                if i.key_pressed(egui::Key::O) {
+                    self.catalog_dialog.is_creating_new = false;
+                    self.catalog_dialog.is_open = true;
+                }
+                // Ctrl+N: New Catalog
+                if i.key_pressed(egui::Key::N) {
+                    self.catalog_dialog.is_creating_new = true;
+                    self.catalog_dialog.is_open = true;
+                }
+                // Ctrl+Shift+I: Ingest
+                if i.key_pressed(egui::Key::I) && i.modifiers.shift {
+                    self.ingest_dialog.is_open = true;
+                }
+                // Ctrl+I: Import
+                else if i.key_pressed(egui::Key::I) && !i.modifiers.shift {
+                    self.import_dialog.is_open = true;
+                }
+                // Ctrl+E: Export to NLE
+                if i.key_pressed(egui::Key::E) {
+                    self.export_dialog.selected_count = self.selected_ids.len();
+                    self.export_dialog.total_count = self.videos.len();
+                    self.export_dialog.use_selected_only = !self.selected_ids.is_empty();
+                    self.export_dialog.is_open = true;
+                }
+                // Ctrl+B: Toggle Navigator
+                if i.key_pressed(egui::Key::B) {
+                    self.show_navigator = !self.show_navigator;
+                }
+                // Ctrl+J: Toggle Inspector
+                if i.key_pressed(egui::Key::J) {
+                    self.show_inspector = !self.show_inspector;
+                }
+                // Ctrl+L: Toggle Loop in player
+                if i.key_pressed(egui::Key::L) {
+                    if let Some(ref mut p) = self.active_player {
+                        p.looping = !p.looping;
+                    }
+                }
+                return;
+            }
+
+            // Guard single-key shortcuts from firing while editing text!
+            if text_focused {
+                return;
+            }
+
+            // Shortcuts Help: ? or F1
+            if i.key_pressed(egui::Key::F1) || (i.key_pressed(egui::Key::Slash) && i.modifiers.shift) {
+                self.show_shortcuts_modal = !self.show_shortcuts_modal;
+                return;
+            }
+
+            // View Mode Shortcuts
+            // G: Grid view
+            if i.key_pressed(egui::Key::G) && self.is_player_mode {
+                self.close_player();
+            }
+            // Tab: Toggle between Grid and Player
+            if i.key_pressed(egui::Key::Tab) {
+                if self.is_player_mode {
+                    self.close_player();
+                } else if let Some(v) = self.selected_video().cloned() {
+                    self.open_player(v, ctx);
+                }
+            }
+            // Enter: Open in player if in grid, or close if in player
+            if i.key_pressed(egui::Key::Enter) {
+                if self.is_player_mode {
+                    self.close_player();
+                } else if let Some(v) = self.selected_video().cloned() {
+                    self.open_player(v, ctx);
+                }
+            }
+
+            // Space: Play/Pause in player, or open in player if in grid
             if i.key_pressed(egui::Key::Space) {
                 if let Some(ref mut p) = self.active_player {
                     p.toggle_play();
+                } else if let Some(v) = self.selected_video().cloned() {
+                    self.open_player(v, ctx);
                 }
             }
-            // Arrow Left / Right: step frames
+
+            // J / K / L Shuttle Controls (NLE Standard)
+            if self.is_player_mode {
+                if i.key_pressed(egui::Key::J) {
+                    if let Some(ref mut p) = self.active_player { p.shuttle_reverse(); }
+                }
+                if i.key_pressed(egui::Key::K) {
+                    if let Some(ref mut p) = self.active_player { p.shuttle_stop(); }
+                }
+                if i.key_pressed(egui::Key::L) {
+                    if let Some(ref mut p) = self.active_player { p.shuttle_forward(); }
+                }
+
+                // In / Out Points
+                if i.key_pressed(egui::Key::I) {
+                    if let Some(ref mut p) = self.active_player {
+                        if i.modifiers.shift {
+                            p.goto_in();
+                        } else {
+                            p.in_point = Some(p.playhead);
+                        }
+                    }
+                }
+                if i.key_pressed(egui::Key::O) {
+                    if let Some(ref mut p) = self.active_player {
+                        if i.modifiers.shift {
+                            p.goto_out();
+                        } else {
+                            p.out_point = Some(p.playhead);
+                        }
+                    }
+                }
+                if i.key_pressed(egui::Key::X) && i.modifiers.alt {
+                    if let Some(ref mut p) = self.active_player {
+                        p.in_point = None;
+                        p.out_point = None;
+                    }
+                }
+                // Home / End
+                if i.key_pressed(egui::Key::Home) {
+                    if let Some(ref mut p) = self.active_player { p.goto_start(); }
+                }
+                if i.key_pressed(egui::Key::End) {
+                    if let Some(ref mut p) = self.active_player { p.goto_end(); }
+                }
+            }
+
+            // Arrow Keys
             if i.key_pressed(egui::Key::ArrowLeft) {
-                if let Some(ref mut p) = self.active_player {
-                    if i.modifiers.shift { p.step_10_backward(); } else { p.step_backward(); }
+                if self.is_player_mode {
+                    if let Some(ref mut p) = self.active_player {
+                        if i.modifiers.shift { p.step_10_backward(); } else { p.step_backward(); }
+                    }
+                } else {
+                    self.navigate_grid(-1, ctx);
                 }
             }
             if i.key_pressed(egui::Key::ArrowRight) {
-                if let Some(ref mut p) = self.active_player {
-                    if i.modifiers.shift { p.step_10_forward(); } else { p.step_forward(); }
-                }
-            }
-            // Escape: close player
-            if i.key_pressed(egui::Key::Escape) {
                 if self.is_player_mode {
-                    self.is_player_mode = false;
-                    self.active_player = None;
-                }
-            }
-            // Tab: toggle player view
-            if i.key_pressed(egui::Key::Tab) {
-                if let Some(v) = self.selected_video().cloned() {
-                    if self.is_player_mode {
-                        self.is_player_mode = false;
-                    } else {
-                        self.active_player = Some(VideoPlayer::new(v, ctx.clone()));
-                        self.is_player_mode = true;
+                    if let Some(ref mut p) = self.active_player {
+                        if i.modifiers.shift { p.step_10_forward(); } else { p.step_forward(); }
                     }
+                } else {
+                    self.navigate_grid(1, ctx);
                 }
             }
-            // P: Pick, X: Reject, U: Unflag
-            if i.key_pressed(egui::Key::P) && !i.modifiers.command && !i.modifiers.ctrl {
-                if let Some(id) = self.selected_ids.iter().next().copied() {
-                    self.update_video_flag(id, PickFlag::Picked);
-                }
+            if i.key_pressed(egui::Key::ArrowUp) && !self.is_player_mode {
+                self.navigate_grid(-4, ctx);
             }
-            if i.key_pressed(egui::Key::X) && !i.modifiers.command && !i.modifiers.ctrl {
-                if let Some(id) = self.selected_ids.iter().next().copied() {
-                    self.update_video_flag(id, PickFlag::Rejected);
-                }
+            if i.key_pressed(egui::Key::ArrowDown) && !self.is_player_mode {
+                self.navigate_grid(4, ctx);
             }
-            if i.key_pressed(egui::Key::U) && !i.modifiers.command && !i.modifiers.ctrl {
-                if let Some(id) = self.selected_ids.iter().next().copied() {
-                    self.update_video_flag(id, PickFlag::Unflagged);
-                }
+
+            // [ and ] Clip Navigation
+            if i.key_pressed(egui::Key::OpenBracket) {
+                self.prev_player_clip(ctx);
             }
-            // 1-5: Ratings
+            if i.key_pressed(egui::Key::CloseBracket) {
+                self.next_player_clip(ctx);
+            }
+
+            // Culling & Batch Flagging: P (Pick), X (Reject), U (Unflag)
+            if i.key_pressed(egui::Key::P) && !i.modifiers.alt {
+                self.update_selected_flags(PickFlag::Picked);
+            }
+            if i.key_pressed(egui::Key::X) && !i.modifiers.alt {
+                self.update_selected_flags(PickFlag::Rejected);
+            }
+            if i.key_pressed(egui::Key::U) {
+                self.update_selected_flags(PickFlag::Unflagged);
+            }
+
+            // Star Ratings 0–5
+            if i.key_pressed(egui::Key::Num0) {
+                self.update_selected_ratings(0);
+            }
             for star in 1..=5 {
                 let key = match star {
                     1 => egui::Key::Num1,
@@ -274,13 +561,57 @@ impl CineExplorerApp {
                     5 => egui::Key::Num5,
                     _ => continue,
                 };
-                if i.key_pressed(key) && !i.modifiers.command && !i.modifiers.ctrl {
-                    if let Some(id) = self.selected_ids.iter().next().copied() {
-                        self.update_video_rating(id, star);
-                    }
+                if i.key_pressed(key) {
+                    self.update_selected_ratings(star);
+                }
+            }
+
+            // Delete / Backspace: Remove selected video
+            if i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace) {
+                if let Some(v) = self.selected_video().cloned() {
+                    self.delete_dialog.video_id = v.id;
+                    self.delete_dialog.file_path = v.file_path;
+                    self.delete_dialog.file_name = v.file_name;
+                    self.delete_dialog.is_open = true;
                 }
             }
         });
+    }
+
+    fn update_selected_ratings(&mut self, rating: u8) {
+        if let Some(ref db) = self.db {
+            if let Ok(conn) = db.conn() {
+                for id in &self.selected_ids {
+                    let _ = update_rating(&conn, *id, rating);
+                    if let Some(v) = self.videos.iter_mut().find(|v| v.id == *id) {
+                        v.rating = rating;
+                    }
+                }
+                if let Some(ref mut p) = self.active_player {
+                    if self.selected_ids.contains(&p.clip.id) {
+                        p.clip.rating = rating;
+                    }
+                }
+            }
+        }
+    }
+
+    fn update_selected_flags(&mut self, flag: PickFlag) {
+        if let Some(ref db) = self.db {
+            if let Ok(conn) = db.conn() {
+                for id in &self.selected_ids {
+                    let _ = update_flag(&conn, *id, flag);
+                    if let Some(v) = self.videos.iter_mut().find(|v| v.id == *id) {
+                        v.flag = flag;
+                    }
+                }
+                if let Some(ref mut p) = self.active_player {
+                    if self.selected_ids.contains(&p.clip.id) {
+                        p.clip.flag = flag;
+                    }
+                }
+            }
+        }
     }
 
     fn update_video_rating(&mut self, video_id: i64, rating: u8) {
@@ -289,6 +620,11 @@ impl CineExplorerApp {
                 let _ = update_rating(&conn, video_id, rating);
                 if let Some(v) = self.videos.iter_mut().find(|v| v.id == video_id) {
                     v.rating = rating;
+                }
+                if let Some(ref mut p) = self.active_player {
+                    if p.clip.id == video_id {
+                        p.clip.rating = rating;
+                    }
                 }
             }
         }
@@ -300,6 +636,11 @@ impl CineExplorerApp {
                 let _ = update_flag(&conn, video_id, flag);
                 if let Some(v) = self.videos.iter_mut().find(|v| v.id == video_id) {
                     v.flag = flag;
+                }
+                if let Some(ref mut p) = self.active_player {
+                    if p.clip.id == video_id {
+                        p.clip.flag = flag;
+                    }
                 }
             }
         }
@@ -329,39 +670,17 @@ impl eframe::App for CineExplorerApp {
             player.update(ctx);
         }
 
-        // Poll importer messages (In-Place Indexing)
-        let mut import_msgs = Vec::new();
-        if let Some(ref rx) = self.import_rx {
-            while let Ok(msg) = rx.try_recv() {
-                import_msgs.push(msg);
+        // Poll importer events (Background Non-Blocking Queue)
+        let mut do_catalog_refresh = false;
+        if let Some(ref mut q) = self.import_queue {
+            let (clips_added, batch_finished) = q.poll_events();
+            if batch_finished || (clips_added && self.last_live_catalog_refresh.elapsed() >= std::time::Duration::from_millis(500)) {
+                do_catalog_refresh = true;
             }
         }
-        for msg in import_msgs {
-            match msg {
-                ImportMessage::Progress(prog) => {
-                    self.import_dialog.progress = Some(prog);
-                }
-                ImportMessage::Complete(summary) => {
-                    self.import_dialog.is_running = false;
-                    self.import_dialog.summary = Some(summary);
-                    self.import_rx = None;
-                    self.import_cancel_flag = None;
-                    self.refresh_catalog();
-                }
-                ImportMessage::Cancelled(summary) => {
-                    self.import_dialog.is_running = false;
-                    self.import_dialog.summary = Some(summary);
-                    self.import_rx = None;
-                    self.import_cancel_flag = None;
-                    self.refresh_catalog();
-                }
-                ImportMessage::Error(err) => {
-                    self.import_dialog.is_running = false;
-                    self.import_dialog.error_message = Some(err);
-                    self.import_rx = None;
-                    self.import_cancel_flag = None;
-                }
-            }
+        if do_catalog_refresh {
+            self.last_live_catalog_refresh = std::time::Instant::now();
+            self.refresh_catalog();
         }
 
         // Poll ingester messages (SD Card / Media Offload & Copy)
@@ -408,6 +727,8 @@ impl eframe::App for CineExplorerApp {
         // TOP PANEL: Header & Search & Controls
         let mut top_action = None;
         TopBottomPanel::top("top_panel").show(ctx, |ui| {
+            let default_queue_state = crate::importer::ImportQueueState::default();
+            let q_state = self.import_queue.as_ref().map(|q| q.state()).unwrap_or(&default_queue_state);
             let act = render_top_bar(
                 ui,
                 catalog_name,
@@ -415,7 +736,10 @@ impl eframe::App for CineExplorerApp {
                 &mut self.filter,
                 &mut self.card_width,
                 self.is_player_mode,
-                &mut self.show_inspector,
+                self.show_navigator,
+                self.show_inspector,
+                q_state,
+                self.show_import_status_window,
             );
             if act.is_some() {
                 top_action = act;
@@ -449,40 +773,116 @@ impl eframe::App for CineExplorerApp {
                 }
                 TopBarAction::TogglePlayerView => {
                     if self.is_player_mode {
-                        self.is_player_mode = false;
+                        self.close_player();
                     } else if let Some(v) = self.selected_video().cloned() {
-                        self.active_player = Some(VideoPlayer::new(v, ctx.clone()));
-                        self.is_player_mode = true;
+                        self.open_player(v, ctx);
                     }
+                }
+                TopBarAction::ToggleNavigator => {
+                    self.show_navigator = !self.show_navigator;
                 }
                 TopBarAction::ToggleInspector => {
                     self.show_inspector = !self.show_inspector;
                 }
+                TopBarAction::ToggleImportStatus => {
+                    self.show_import_status_window = !self.show_import_status_window;
+                }
+                TopBarAction::ShowShortcutsHelp => {
+                    self.show_shortcuts_modal = true;
+                }
+                TopBarAction::FilterChanged => {
+                    self.refresh_catalog();
+                }
             }
         }
 
-        // LEFT PANEL: Navigator & Smart Collections
-        let mut nav_action = None;
-        SidePanel::left("left_navigator")
-            .resizable(true)
-            .default_width(220.0)
-            .width_range(180.0..=360.0)
-            .show(ctx, |ui| {
-                let act = render_navigator(
-                    ui,
-                    &self.filter.collection,
-                    &self.stats,
-                    &self.containers,
-                    &self.codecs,
-                    &self.cameras,
-                    &self.folders,
-                    &self.tags,
-                    &mut self.new_nav_tag,
+        // BOTTOM PANEL: Professional Status Bar
+        TopBottomPanel::bottom("bottom_status_bar").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+
+                // Left: Catalog & selection stats
+                let total_vids = self.videos.len();
+                let sel_count = self.selected_ids.len();
+                let count_str = if sel_count > 0 {
+                    format!("{} of {} clips selected", sel_count, total_vids)
+                } else {
+                    format!("{} clips", total_vids)
+                };
+                ui.label(RichText::new(count_str).strong().size(11.5).color(TEXT_PRIMARY));
+
+                let total_gb = (self.stats.total_size_bytes as f64) / (1024.0 * 1024.0 * 1024.0);
+                let dur_h = (self.stats.total_duration_seconds / 3600.0) as u32;
+                let dur_m = ((self.stats.total_duration_seconds % 3600.0) / 60.0) as u32;
+                let dur_s = (self.stats.total_duration_seconds % 60.0) as u32;
+                ui.label(
+                    RichText::new(format!("· {:.2} GB · {:02}h {:02}m {:02}s", total_gb, dur_h, dur_m, dur_s))
+                        .size(11.0)
+                        .color(TEXT_MUTED),
                 );
-                if act.is_some() {
-                    nav_action = act;
+
+                // Center: Background operation progress indicator
+                if let Some(ref q) = self.import_queue {
+                    let st = q.state();
+                    if let Some(ref active) = st.active_job {
+                        ui.add(egui::Separator::default().vertical());
+                        let text = format!("{} Importing {}/{} ({})", egui_phosphor::regular::SPINNER_GAP, active.current, active.total, active.label);
+                        if ui.small_button(RichText::new(text).small().color(ACCENT_BLUE)).on_hover_text("Click to open Import Queue & Status").clicked() {
+                            self.show_import_status_window = true;
+                        }
+                    } else if !st.problems.is_empty() {
+                        ui.add(egui::Separator::default().vertical());
+                        let text = format!("{} {} problem(s)", egui_phosphor::regular::WARNING, st.problems.len());
+                        if ui.small_button(RichText::new(text).small().color(ACCENT_RED)).on_hover_text("Click to view import problems").clicked() {
+                            self.show_import_status_window = true;
+                        }
+                    }
                 }
+                if self.ingest_dialog.is_running {
+                    ui.add(egui::Separator::default().vertical());
+                    if ui.small_button(RichText::new("Offloading media...").small().color(ACCENT_ORANGE)).on_hover_text("Click to show Ingest progress").clicked() {
+                        self.ingest_dialog.is_open = true;
+                    }
+                }
+
+                // Right: Quick keyboard shortcuts hint pills
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("? Shortcuts").on_hover_text("Open Keyboard Shortcuts Cheat-sheet (F1)").clicked() {
+                        self.show_shortcuts_modal = true;
+                    }
+                    kbd_pill(ui, "1-5 Rate");
+                    kbd_pill(ui, "P/X Flag");
+                    kbd_pill(ui, "I/O Points");
+                    kbd_pill(ui, "J/K/L Shuttle");
+                    kbd_pill(ui, "Space/Enter Play");
+                });
             });
+        });
+
+        // LEFT PANEL: Navigator & Smart Collections (if open)
+        let mut nav_action = None;
+        if self.show_navigator {
+            SidePanel::left("left_navigator")
+                .resizable(true)
+                .default_width(220.0)
+                .width_range(180.0..=360.0)
+                .show(ctx, |ui| {
+                    let act = render_navigator(
+                        ui,
+                        &self.filter.collection,
+                        &self.stats,
+                        &self.containers,
+                        &self.codecs,
+                        &self.cameras,
+                        &self.folders,
+                        &self.tags,
+                        &mut self.new_nav_tag,
+                    );
+                    if act.is_some() {
+                        nav_action = act;
+                    }
+                });
+        }
 
         if let Some(act) = nav_action {
             match act {
@@ -502,9 +902,9 @@ impl eframe::App for CineExplorerApp {
             }
         }
 
-        // RIGHT PANEL: Metadata Inspector (if open and not full player)
+        // RIGHT PANEL: Metadata Inspector (available in BOTH Grid and Player views!)
         let mut inspector_action = None;
-        if self.show_inspector && !self.is_player_mode {
+        if self.show_inspector {
             SidePanel::right("right_inspector")
                 .resizable(true)
                 .default_width(280.0)
@@ -535,6 +935,9 @@ impl eframe::App for CineExplorerApp {
         if let Some(act) = inspector_action {
             if let Some(sel_id) = self.selected_ids.iter().next().copied() {
                 match act {
+                    InspectorAction::OpenPlayer(record) => {
+                        self.open_player(*record, ctx);
+                    }
                     InspectorAction::UpdateRating(r) => self.update_video_rating(sel_id, r),
                     InspectorAction::UpdateFlag(f) => self.update_video_flag(sel_id, f),
                     InspectorAction::UpdateColor(c) => self.update_video_color(sel_id, c),
@@ -614,10 +1017,12 @@ impl eframe::App for CineExplorerApp {
         let mut grid_action = None;
         let mut player_action = None;
 
+        let (clip_idx, total_clips) = self.current_clip_index();
+
         CentralPanel::default().show(ctx, |ui| {
             if self.is_player_mode {
                 if let Some(ref mut player) = self.active_player {
-                    if let Some(p_act) = render_player_view(ui, player) {
+                    if let Some(p_act) = render_player_view(ui, player, clip_idx, total_clips) {
                         player_action = Some(p_act);
                     }
                 } else {
@@ -663,9 +1068,38 @@ impl eframe::App for CineExplorerApp {
                         p.out_point = None;
                     }
                 }
+                TransportAction::GotoIn => {
+                    if let Some(ref mut p) = self.active_player { p.goto_in(); }
+                }
+                TransportAction::GotoOut => {
+                    if let Some(ref mut p) = self.active_player { p.goto_out(); }
+                }
+                TransportAction::GotoStart => {
+                    if let Some(ref mut p) = self.active_player { p.goto_start(); }
+                }
+                TransportAction::GotoEnd => {
+                    if let Some(ref mut p) = self.active_player { p.goto_end(); }
+                }
+                TransportAction::UpdateRating(r) => {
+                    if let Some(ref p) = self.active_player {
+                        let id = p.clip.id;
+                        self.update_video_rating(id, r);
+                    }
+                }
+                TransportAction::UpdateFlag(f) => {
+                    if let Some(ref p) = self.active_player {
+                        let id = p.clip.id;
+                        self.update_video_flag(id, f);
+                    }
+                }
+                TransportAction::PrevClip => {
+                    self.prev_player_clip(ctx);
+                }
+                TransportAction::NextClip => {
+                    self.next_player_clip(ctx);
+                }
                 TransportAction::ClosePlayer => {
-                    self.is_player_mode = false;
-                    self.active_player = None;
+                    self.close_player();
                 }
                 TransportAction::PlayExternal => {
                     if let Some(ref p) = self.active_player {
@@ -681,6 +1115,7 @@ impl eframe::App for CineExplorerApp {
                 GridAction::SelectOnly(id) => {
                     self.selected_ids.clear();
                     self.selected_ids.insert(id);
+                    self.last_selected_id = Some(id);
                     self.sync_inspector_buffers();
                 }
                 GridAction::ToggleSelect(id) => {
@@ -688,12 +1123,15 @@ impl eframe::App for CineExplorerApp {
                         self.selected_ids.remove(&id);
                     } else {
                         self.selected_ids.insert(id);
+                        self.last_selected_id = Some(id);
                     }
                     self.sync_inspector_buffers();
                 }
+                GridAction::SelectRange(id) => {
+                    self.select_range(id);
+                }
                 GridAction::OpenPlayer(record) => {
-                    self.active_player = Some(VideoPlayer::new(record, ctx.clone()));
-                    self.is_player_mode = true;
+                    self.open_player(*record, ctx);
                 }
                 GridAction::PlayExternal(file_path) => {
                     let _ = open::that(file_path);
@@ -715,6 +1153,12 @@ impl eframe::App for CineExplorerApp {
                         self.delete_dialog.is_open = true;
                     }
                 }
+                GridAction::StartIngest => {
+                    self.ingest_dialog.is_open = true;
+                }
+                GridAction::StartImport => {
+                    self.import_dialog.is_open = true;
+                }
             }
         }
 
@@ -727,35 +1171,27 @@ impl eframe::App for CineExplorerApp {
             }
         }
 
-        // Render Import Dialog (In-Place Indexing)
-        if let Some(imp_act) = render_import_dialog(ctx, &mut self.import_dialog) {
+        // Render Import Dialog (In-Place Indexing file/folder picker)
+        let is_busy = self.import_queue.as_ref().is_some_and(|q| q.is_busy());
+        if let Some(imp_act) = render_import_dialog(ctx, &mut self.import_dialog, is_busy) {
             match imp_act {
-                ImportDialogAction::StartImport(paths) => {
-                    if let Some(ref db_path) = self.current_catalog_path {
-                        let (tx, rx) = unbounded();
-                        let cancel_flag = Arc::new(AtomicBool::new(false));
-                        self.import_rx = Some(rx);
-                        self.import_cancel_flag = Some(cancel_flag.clone());
-                        self.import_dialog.is_running = true;
-                        self.import_dialog.summary = None;
-                        self.import_dialog.error_message = None;
+                ImportDialogAction::EnqueueImport(paths) => {
+                    if let Some(ref mut q) = self.import_queue {
+                        q.enqueue(paths, None);
+                        self.show_import_status_window = true;
+                    }
+                }
+                ImportDialogAction::Cancel => {}
+            }
+        }
 
-                        Importer::start(
-                            paths,
-                            db_path.clone(),
-                            tx,
-                            cancel_flag,
-                            ctx.clone(),
-                        );
+        // Render Floating Import Queue & Status Window
+        if let Some(ref mut q) = self.import_queue {
+            if let Some(st_act) = render_import_status_window(ctx, q, &mut self.show_import_status_window) {
+                match st_act {
+                    ImportStatusAction::OpenImportDialog => {
+                        self.import_dialog.is_open = true;
                     }
-                }
-                ImportDialogAction::Cancel => {
-                    if let Some(ref cancel_flag) = self.import_cancel_flag {
-                        cancel_flag.store(true, Ordering::Relaxed);
-                    }
-                }
-                ImportDialogAction::Done => {
-                    self.refresh_catalog();
                 }
             }
         }
@@ -843,5 +1279,71 @@ impl eframe::App for CineExplorerApp {
                 ExportDialogAction::Cancel => {}
             }
         }
+
+        // Keyboard Shortcuts Reference Modal
+        if self.show_shortcuts_modal {
+            let mut close_modal = false;
+            egui::Window::new(RichText::new(format!("{} Keyboard Shortcuts", egui_phosphor::regular::KEYBOARD)).strong())
+                .collapsible(false)
+                .resizable(false)
+                .default_width(520.0)
+                .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.spacing_mut().item_spacing.y = 8.0;
+
+                    egui::Grid::new("shortcuts_grid")
+                        .striped(true)
+                        .spacing(Vec2::new(16.0, 6.0))
+                        .show(ui, |ui| {
+                            ui.label(RichText::new("ACTION").small().strong().color(TEXT_MUTED));
+                            ui.label(RichText::new("SHORTCUT").small().strong().color(TEXT_MUTED));
+                            ui.label(RichText::new("CONTEXT").small().strong().color(TEXT_MUTED));
+                            ui.end_row();
+
+                            shortcut_row(ui, "Play / Pause", "Space / K", "Player / Grid");
+                            shortcut_row(ui, "Open in Player", "Enter / Space", "Grid");
+                            shortcut_row(ui, "Back to Grid", "Esc / G / Tab", "Player");
+                            shortcut_row(ui, "Shuttle Reverse / Stop / Forward", "J / K / L", "Player (NLE 1x/2x/4x)");
+                            shortcut_row(ui, "Step ±1 Frame", "← / →", "Player");
+                            shortcut_row(ui, "Step ±10 Frames", "Shift + ← / →", "Player");
+                            shortcut_row(ui, "Mark In / Out Point", "I / O", "Player");
+                            shortcut_row(ui, "Clear In / Out Points", "Alt + X", "Player");
+                            shortcut_row(ui, "Toggle Loop", "Ctrl + L", "Player");
+                            shortcut_row(ui, "Next / Prev Clip", "[ / ]", "Player");
+                            shortcut_row(ui, "Navigate Grid Cards", "Arrow Keys", "Grid");
+                            shortcut_row(ui, "Flag as Pick / Reject / Unflag", "P / X / U", "Global (Batch)");
+                            shortcut_row(ui, "Star Rating (0-5)", "0, 1, 2, 3, 4, 5", "Global (Batch)");
+                            shortcut_row(ui, "Select All / Deselect All", "Ctrl + A / Ctrl + D", "Grid");
+                            shortcut_row(ui, "Range Selection", "Shift + Click", "Grid");
+                            shortcut_row(ui, "Multi Selection", "Ctrl + Click", "Grid");
+                            shortcut_row(ui, "Toggle Left Navigator", "Ctrl + B / [", "Global");
+                            shortcut_row(ui, "Toggle Right Inspector", "Ctrl + J / F9", "Global");
+                            shortcut_row(ui, "Ingest from Card / Media", "Ctrl + Shift + I", "Global");
+                            shortcut_row(ui, "Import Folder In-Place", "Ctrl + I", "Global");
+                            shortcut_row(ui, "Export to DaVinci / Premiere", "Ctrl + E", "Global");
+                            shortcut_row(ui, "New / Open Catalog", "Ctrl + N / Ctrl + O", "Global");
+                            shortcut_row(ui, "Remove from Catalog", "Delete / Backspace", "Global");
+                            shortcut_row(ui, "This Shortcuts Help", "? / F1", "Global");
+                        });
+
+                    ui.add_space(10.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Close").clicked() {
+                            close_modal = true;
+                        }
+                    });
+                });
+
+            if close_modal {
+                self.show_shortcuts_modal = false;
+            }
+        }
     }
+}
+
+fn shortcut_row(ui: &mut egui::Ui, action: &str, shortcut: &str, context: &str) {
+    ui.label(RichText::new(action).size(12.0).color(TEXT_PRIMARY));
+    ui.label(RichText::new(shortcut).monospace().strong().size(11.5).color(ACCENT_BLUE));
+    ui.label(RichText::new(context).small().color(TEXT_SECONDARY));
+    ui.end_row();
 }

@@ -25,7 +25,7 @@ pub fn insert_video(conn: &Connection, v: &VideoRecord) -> Result<i64> {
             bitrate, has_audio, audio_codec, audio_channels, audio_sample_rate,
             camera_make, camera_model, lens_model, focal_length, aperture,
             iso, shutter_speed, white_balance, date_recorded, imported_at,
-            rating, flag, notes, color_label, scene, shot, take, reel, location, camera_unit
+            rating, flag, notes, color_label, scene, shot, take, reel, location, camera_unit, log_profile
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6,
             ?7, ?8, ?9, ?10, ?11, ?12,
@@ -33,7 +33,7 @@ pub fn insert_video(conn: &Connection, v: &VideoRecord) -> Result<i64> {
             ?18, ?19, ?20, ?21, ?22,
             ?23, ?24, ?25, ?26, ?27,
             ?28, ?29, ?30, ?31, ?32,
-            ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42
+            ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43
         )
         "#,
         params![
@@ -79,6 +79,7 @@ pub fn insert_video(conn: &Connection, v: &VideoRecord) -> Result<i64> {
             v.reel,
             v.location,
             v.camera_unit,
+            v.log_profile,
         ],
     )?;
 
@@ -134,6 +135,7 @@ pub fn update_notes(conn: &Connection, video_id: i64, notes: &str) -> Result<()>
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn update_slate(
     conn: &Connection,
     video_id: i64,
@@ -156,6 +158,53 @@ pub fn update_slate(
         WHERE id = ?7
         "#,
         params![scene, shot, take, reel, location, camera_unit, video_id],
+    )?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn update_video_metadata(
+    conn: &Connection,
+    video_id: i64,
+    camera_make: &str,
+    camera_model: &str,
+    lens_model: &str,
+    focal_length: &str,
+    aperture: &str,
+    iso: u32,
+    shutter_speed: &str,
+    white_balance: &str,
+    log_profile: &str,
+    date_recorded: Option<&str>,
+) -> Result<()> {
+    conn.execute(
+        r#"
+        UPDATE videos SET
+            camera_make = ?1,
+            camera_model = ?2,
+            lens_model = ?3,
+            focal_length = ?4,
+            aperture = ?5,
+            iso = ?6,
+            shutter_speed = ?7,
+            white_balance = ?8,
+            log_profile = ?9,
+            date_recorded = COALESCE(?10, date_recorded)
+        WHERE id = ?11
+        "#,
+        params![
+            camera_make,
+            camera_model,
+            lens_model,
+            focal_length,
+            aperture,
+            iso,
+            shutter_speed,
+            white_balance,
+            log_profile,
+            date_recorded,
+            video_id,
+        ],
     )?;
     Ok(())
 }
@@ -188,10 +237,8 @@ pub fn list_tags(conn: &Connection) -> Result<Vec<Tag>> {
     })?;
 
     let mut tags = Vec::new();
-    for r in rows {
-        if let Ok(t) = r {
-            tags.push(t);
-        }
+    for t in rows.flatten() {
+        tags.push(t);
     }
     Ok(tags)
 }
@@ -260,7 +307,7 @@ pub fn query_videos(conn: &Connection, criteria: &FilterCriteria) -> Result<Vec<
             v.bitrate, v.has_audio, v.audio_codec, v.audio_channels, v.audio_sample_rate,
             v.camera_make, v.camera_model, v.lens_model, v.focal_length, v.aperture,
             v.iso, v.shutter_speed, v.white_balance, v.date_recorded, v.imported_at,
-            v.rating, v.flag, v.notes, v.color_label, v.scene, v.shot, v.take, v.reel, v.location, v.camera_unit
+            v.rating, v.flag, v.notes, v.color_label, v.scene, v.shot, v.take, v.reel, v.location, v.camera_unit, v.log_profile
         FROM videos v
         "#,
     );
@@ -312,6 +359,9 @@ pub fn query_videos(conn: &Connection, criteria: &FilterCriteria) -> Result<Vec<
         }
         SmartCollection::Favorites => {
             conditions.push("v.rating >= 4".to_string());
+        }
+        SmartCollection::LogFootage => {
+            conditions.push("(v.log_profile != '' AND LOWER(v.log_profile) != 'none')".to_string());
         }
         SmartCollection::TenBitPlus => {
             conditions.push("v.bit_depth >= 10".to_string());
@@ -437,11 +487,9 @@ pub fn query_videos(conn: &Connection, criteria: &FilterCriteria) -> Result<Vec<
     })?;
 
     let mut videos = Vec::new();
-    for r in rows {
-        if let Ok(mut v) = r {
-            v.tags = get_tags_for_video(conn, v.id);
-            videos.push(v);
-        }
+    for mut v in rows.flatten() {
+        v.tags = get_tags_for_video(conn, v.id);
+        videos.push(v);
     }
 
     Ok(videos)
@@ -456,8 +504,13 @@ pub fn get_catalog_stats(conn: &Connection) -> CatalogStats {
             COUNT(*),
             COALESCE(SUM(file_size), 0),
             COALESCE(SUM(duration_seconds), 0.0),
+            COALESCE(SUM(CASE WHEN flag = 1 THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN flag = 2 THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN flag = 0 THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN rating >= 4 THEN 1 ELSE 0 END), 0),
             COALESCE(SUM(CASE WHEN bit_depth >= 10 THEN 1 ELSE 0 END), 0),
             COALESCE(SUM(CASE WHEN width >= 3840 OR height >= 2160 THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN fps >= 49.0 THEN 1 ELSE 0 END), 0),
             COALESCE(SUM(CASE WHEN LOWER(codec) LIKE '%braw%' OR LOWER(container) = 'braw' THEN 1 ELSE 0 END), 0),
             COALESCE(SUM(CASE WHEN LOWER(codec) LIKE '%prores%' OR LOWER(profile) LIKE '%prores%' THEN 1 ELSE 0 END), 0),
             COALESCE(SUM(CASE WHEN LOWER(codec) IN ('hevc', 'h265') THEN 1 ELSE 0 END), 0),
@@ -469,12 +522,17 @@ pub fn get_catalog_stats(conn: &Connection) -> CatalogStats {
             stats.total_clips = row.get::<_, i64>(0)? as usize;
             stats.total_size_bytes = row.get::<_, i64>(1)? as u64;
             stats.total_duration_seconds = row.get::<_, f64>(2)?;
-            stats.ten_bit_clips = row.get::<_, i64>(3)? as usize;
-            stats.four_k_clips = row.get::<_, i64>(4)? as usize;
-            stats.braw_clips = row.get::<_, i64>(5)? as usize;
-            stats.prores_clips = row.get::<_, i64>(6)? as usize;
-            stats.h265_clips = row.get::<_, i64>(7)? as usize;
-            stats.h264_clips = row.get::<_, i64>(8)? as usize;
+            stats.picks_clips = row.get::<_, i64>(3)? as usize;
+            stats.rejected_clips = row.get::<_, i64>(4)? as usize;
+            stats.unflagged_clips = row.get::<_, i64>(5)? as usize;
+            stats.favorites_clips = row.get::<_, i64>(6)? as usize;
+            stats.ten_bit_clips = row.get::<_, i64>(7)? as usize;
+            stats.four_k_clips = row.get::<_, i64>(8)? as usize;
+            stats.hfr_clips = row.get::<_, i64>(9)? as usize;
+            stats.braw_clips = row.get::<_, i64>(10)? as usize;
+            stats.prores_clips = row.get::<_, i64>(11)? as usize;
+            stats.h265_clips = row.get::<_, i64>(12)? as usize;
+            stats.h264_clips = row.get::<_, i64>(13)? as usize;
             Ok(())
         },
     );
@@ -537,13 +595,11 @@ pub fn get_distinct_folders(conn: &Connection) -> Vec<String> {
     let mut folder_set = HashSet::new();
 
     if let Ok(iter) = rows {
-        for path_res in iter {
-            if let Ok(path_str) = path_res {
-                if let Some(parent) = Path::new(&path_str).parent() {
-                    let p_str = parent.to_string_lossy().to_string();
-                    if !p_str.is_empty() {
-                        folder_set.insert(p_str);
-                    }
+        for path_str in iter.flatten() {
+            if let Some(parent) = Path::new(&path_str).parent() {
+                let p_str = parent.to_string_lossy().to_string();
+                if !p_str.is_empty() {
+                    folder_set.insert(p_str);
                 }
             }
         }
