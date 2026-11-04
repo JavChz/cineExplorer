@@ -23,6 +23,7 @@ pub struct ThumbnailManager {
     in_flight: HashSet<i64>,
     tx_req: Sender<ThumbRequest>,
     rx_res: Receiver<ThumbResult>,
+    db_path: PathBuf,
 }
 
 impl ThumbnailManager {
@@ -85,6 +86,7 @@ impl ThumbnailManager {
             in_flight: HashSet::new(),
             tx_req,
             rx_res,
+            db_path,
         }
     }
 
@@ -120,6 +122,9 @@ impl ThumbnailManager {
     pub fn invalidate(&mut self, video_id: i64) {
         self.textures.remove(&video_id);
         self.in_flight.remove(&video_id);
+        if let Ok(conn) = rusqlite::Connection::open(&self.db_path) {
+            let _ = conn.execute("DELETE FROM thumbs WHERE video_id = ?1", rusqlite::params![video_id]);
+        }
     }
 
     pub fn clear(&mut self) {

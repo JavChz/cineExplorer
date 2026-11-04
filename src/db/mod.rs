@@ -74,6 +74,12 @@ mod tests {
             let conn = db.conn().expect("Database conn failed");
             let stats = get_catalog_stats(&conn);
             let videos = query_videos(&conn, &crate::db::models::FilterCriteria::default()).expect("query_videos failed");
+            for v in &videos {
+                if v.file_name.ends_with(".MOV") || v.file_name.ends_with(".mov") {
+                    println!("MOV VIDEO: id={}, name={}, path={}", v.id, v.file_name, v.file_path);
+                    break;
+                }
+            }
             assert!(videos.len() >= stats.total_clips.min(1));
         }
     }

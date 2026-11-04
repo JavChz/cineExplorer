@@ -12,8 +12,10 @@ pub enum GridAction {
     ToggleSelect(i64),
     SelectRange(i64),
     OpenPlayer(Box<VideoRecord>),
+    ExportSelected(i64),
     PlayExternal(String),
     RevealInExplorer(String),
+    RegenerateThumbnail(i64),
     UpdateRating(i64, u8),
     UpdateFlag(i64, crate::db::models::PickFlag),
     UpdateColor(i64, String),
@@ -28,7 +30,7 @@ pub fn render_grid(
     selected_ids: &HashSet<i64>,
     card_width: f32,
     thumb_mgr: &mut ThumbnailManager,
-) -> Option<GridAction> {
+) -> (Option<GridAction>, usize) {
     if videos.is_empty() {
         let mut empty_act = None;
         ui.centered_and_justified(|ui| {
@@ -71,61 +73,71 @@ pub fn render_grid(
                 });
             });
         });
-        return empty_act;
+        return (empty_act, 1);
     }
 
     let mut action = None;
-    let available_w = ui.available_width().max(card_width);
-    let spacing = 12.0;
+    let spacing = 10.0;
+    let scrollbar_reserve = 14.0;
+    let available_w = (ui.available_width() - scrollbar_reserve).max(card_width);
     let col_w = card_width + spacing;
     let num_cols = ((available_w + spacing) / col_w).floor().max(1.0) as usize;
 
-    ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        ui.spacing_mut().item_spacing = Vec2::new(spacing, spacing);
+    ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(spacing, spacing);
 
-        let rows = videos.chunks(num_cols);
-        for chunk in rows {
-            ui.horizontal(|ui| {
-                for video in chunk {
-                    let is_sel = selected_ids.contains(&video.id);
-                    if let Some(card_act) = render_video_card(ui, video, is_sel, card_width, thumb_mgr) {
-                        match card_act {
-                            CardAction::Select { toggle, range } => {
-                                if range {
-                                    action = Some(GridAction::SelectRange(video.id));
-                                } else if toggle {
-                                    action = Some(GridAction::ToggleSelect(video.id));
-                                } else {
-                                    action = Some(GridAction::SelectOnly(video.id));
+            let rows = videos.chunks(num_cols);
+            for chunk in rows {
+                ui.horizontal(|ui| {
+                    for video in chunk {
+                        let is_sel = selected_ids.contains(&video.id);
+                        if let Some(card_act) = render_video_card(ui, video, is_sel, card_width, thumb_mgr) {
+                            match card_act {
+                                CardAction::Select { toggle, range } => {
+                                    if range {
+                                        action = Some(GridAction::SelectRange(video.id));
+                                    } else if toggle {
+                                        action = Some(GridAction::ToggleSelect(video.id));
+                                    } else {
+                                        action = Some(GridAction::SelectOnly(video.id));
+                                    }
                                 }
-                            }
-                            CardAction::OpenPlayer => {
-                                action = Some(GridAction::OpenPlayer(Box::new(video.clone())));
-                            }
-                            CardAction::PlayExternal => {
-                                action = Some(GridAction::PlayExternal(video.file_path.clone()));
-                            }
-                            CardAction::RevealInExplorer => {
-                                action = Some(GridAction::RevealInExplorer(video.file_path.clone()));
-                            }
-                            CardAction::UpdateRating(r) => {
-                                action = Some(GridAction::UpdateRating(video.id, r));
-                            }
-                            CardAction::UpdateFlag(f) => {
-                                action = Some(GridAction::UpdateFlag(video.id, f));
-                            }
-                            CardAction::UpdateColor(c) => {
-                                action = Some(GridAction::UpdateColor(video.id, c));
-                            }
-                            CardAction::DeleteVideo => {
-                                action = Some(GridAction::DeleteVideo(video.id));
+                                CardAction::OpenPlayer => {
+                                    action = Some(GridAction::OpenPlayer(Box::new(video.clone())));
+                                }
+                                CardAction::ExportSelected => {
+                                    action = Some(GridAction::ExportSelected(video.id));
+                                }
+                                CardAction::PlayExternal => {
+                                    action = Some(GridAction::PlayExternal(video.file_path.clone()));
+                                }
+                                CardAction::RevealInExplorer => {
+                                    action = Some(GridAction::RevealInExplorer(video.file_path.clone()));
+                                }
+                                CardAction::RegenerateThumbnail => {
+                                    action = Some(GridAction::RegenerateThumbnail(video.id));
+                                }
+                                CardAction::UpdateRating(r) => {
+                                    action = Some(GridAction::UpdateRating(video.id, r));
+                                }
+                                CardAction::UpdateFlag(f) => {
+                                    action = Some(GridAction::UpdateFlag(video.id, f));
+                                }
+                                CardAction::UpdateColor(c) => {
+                                    action = Some(GridAction::UpdateColor(video.id, c));
+                                }
+                                CardAction::DeleteVideo => {
+                                    action = Some(GridAction::DeleteVideo(video.id));
+                                }
                             }
                         }
                     }
-                }
-            });
-        }
-    });
+                });
+            }
+            ui.add_space(8.0);
+        });
 
-    action
+    (action, num_cols)
 }

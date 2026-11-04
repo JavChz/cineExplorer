@@ -22,6 +22,7 @@ struct FFStream {
     codec_type: Option<String>,
     codec_name: Option<String>,
     codec_long_name: Option<String>,
+    codec_tag_string: Option<String>,
     profile: Option<String>,
     width: Option<u32>,
     height: Option<u32>,
@@ -116,6 +117,11 @@ fn detect_bit_depth(stream: &FFStream) -> u16 {
     // 4. Codec check (BRAW is 12-bit)
     if let Some(ref c) = stream.codec_name {
         if c.to_lowercase().contains("braw") {
+            return 12;
+        }
+    }
+    if let Some(ref tag) = stream.codec_tag_string {
+        if tag.to_lowercase().starts_with("br") {
             return 12;
         }
     }
@@ -373,9 +379,37 @@ pub fn probe_video_file<P: AsRef<Path>>(file_path: P) -> Result<VideoRecord, Str
         if raw_log_profile.is_none() { raw_log_profile = Some(lp); }
     }
 
-    // Fallback camera name for BRAW if not explicitly in tags
-    if (extension == "braw" || container.to_lowercase() == "braw") && camera_make.is_empty() {
-        camera_make = "Blackmagic Design".to_string();
+    // Fallback camera name and metadata for BRAW
+    let is_braw = extension == "braw"
+        || container.eq_ignore_ascii_case("braw")
+        || video_stream
+            .and_then(|vs| vs.codec_tag_string.as_deref())
+            .is_some_and(|tag| tag.to_lowercase().starts_with("br"));
+
+    if is_braw {
+        if codec.is_empty() {
+            codec = "braw".to_string();
+        }
+        if codec_long_name.is_empty() {
+            codec_long_name = "Blackmagic RAW".to_string();
+        }
+        bit_depth = 12;
+        if pixel_format.is_empty() {
+            pixel_format = "12-bit RAW".to_string();
+        }
+        if profile.is_empty() {
+            if let Some(ratio) = combined_tags.get("braw_compression_ratio") {
+                profile = ratio.clone();
+            } else {
+                profile = "12-bit RAW".to_string();
+            }
+        }
+        if color_space.is_empty() {
+            color_space = "Blackmagic Wide Gamut Gen 5".to_string();
+        }
+        if camera_make.is_empty() {
+            camera_make = "Blackmagic Design".to_string();
+        }
         if camera_model.is_empty() {
             camera_model = "Blackmagic Camera".to_string();
         }
@@ -465,6 +499,19 @@ pub fn probe_video_file<P: AsRef<Path>>(file_path: P) -> Result<VideoRecord, Str
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn test_probe_braw_file() {
+        let braw_path = Path::new("P:\\VideoRepo\\BMPCC\\2026-01-21\\A009_03112214_C001.braw");
+        if braw_path.exists() {
+            let res = probe_video_file(braw_path);
+            println!("Probe BRAW result: {:?}", res);
+            if let Ok(rec) = res {
+                println!("Record: codec='{}', width={}, height={}, fps={}, bit_depth={}, make='{}', model='{}', container='{}'",
+                    rec.codec, rec.width, rec.height, rec.fps, rec.bit_depth, rec.camera_make, rec.camera_model, rec.container);
+            }
+        }
+    }
 
     #[test]
     fn test_probe_real_footage() {

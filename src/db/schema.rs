@@ -1,6 +1,6 @@
 use rusqlite::{Connection, Result};
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// Initialize database tables for a cineExplorer catalog
 pub fn init(conn: &Connection) -> Result<bool> {
@@ -93,6 +93,15 @@ pub fn init(conn: &Connection) -> Result<bool> {
         // Safe additive migration for log_profile
         let _ = conn.execute("ALTER TABLE videos ADD COLUMN log_profile TEXT NOT NULL DEFAULT ''", []);
         let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_videos_log ON videos(log_profile)", []);
+    }
+    if version < 3 {
+        // Invalidate stale thumbnails for log videos so they regenerate with the v2 Rec.709 LUT
+        let _ = conn.execute(
+            "DELETE FROM thumbs WHERE video_id IN (SELECT id FROM videos WHERE log_profile != '')",
+            [],
+        );
+    }
+    if version < SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }
 

@@ -101,8 +101,26 @@ impl VideoPlayerSource {
         true
     }
 
+    pub fn is_braw(&self) -> bool {
+        let ext = self.file_path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+        ext == "braw" || self.codec.contains("braw")
+    }
+
     /// Single-frame extraction with fast slice threading, low probe size, and automatic fallback.
     pub fn extract_frame_at(&self, seconds: f32) -> Result<ColorImage, String> {
+        if self.is_braw() {
+            #[cfg(windows)]
+            {
+                if let Ok((w, h, rgba)) = crate::media::os_thumb::extract_os_frame_rgba(
+                    &self.file_path,
+                    self.render_width as u32,
+                    self.render_height as u32,
+                ) {
+                    return Ok(ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba));
+                }
+            }
+        }
+
         let t = seconds.clamp(0.0, self.duration_seconds.max(0.0));
         let expected_bytes = self.render_width * self.render_height * 4;
         let vf = build_vf_filter(self.render_width, self.render_height, self.log_profile, self.apply_rec709);
@@ -196,6 +214,16 @@ impl VideoPlayerSource {
                 &output.stdout[..expected_bytes],
             ))
         } else {
+            #[cfg(windows)]
+            {
+                if let Ok((w, h, rgba)) = crate::media::os_thumb::extract_os_frame_rgba(
+                    &self.file_path,
+                    self.render_width as u32,
+                    self.render_height as u32,
+                ) {
+                    return Ok(ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba));
+                }
+            }
             Err("Failed to decode video frame".to_string())
         }
     }
@@ -290,6 +318,12 @@ impl VideoPlayerSource {
 
     /// Spawns stream decoder based on codec capabilities
     pub fn spawn_stream(&self, start_seconds: f32) -> (Result<Child, String>, bool) {
+        if self.is_braw() {
+            return (
+                Err("Blackmagic RAW uses a proprietary 12-bit RAW stream requiring Blackmagic RAW Player or DaVinci Resolve".to_string()),
+                false,
+            );
+        }
         if self.is_hw_accel_supported() {
             if let Ok(child) = self.spawn_stream_hw(start_seconds) {
                 return (Ok(child), true);

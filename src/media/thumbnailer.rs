@@ -25,6 +25,18 @@ pub fn extract_thumbnail<P: AsRef<Path>>(
     log_profile: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     let path = file_path.as_ref();
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+
+    // Blackmagic RAW cannot be decoded by standard FFmpeg.
+    // Use the OS shell thumbnail provider (powered by the Blackmagic RAW Shell Extension).
+    if ext == "braw" {
+        #[cfg(windows)]
+        {
+            if let Ok(bytes) = crate::media::os_thumb::extract_os_thumbnail(path, 480, 270) {
+                return Ok(bytes);
+            }
+        }
+    }
 
     // Pick timestamp: 1.0s or 15% into the video, avoid black start frames
     let seek_time = if duration_seconds > 2.0 {
@@ -84,7 +96,7 @@ pub fn extract_thumbnail<P: AsRef<Path>>(
 
     let fallback_out = fallback_cmd.output().map_err(|e| format!("Fallback ffmpeg failed: {}", e))?;
     if fallback_out.status.success() && !fallback_out.stdout.is_empty() {
-        Ok(fallback_out.stdout)
+        return Ok(fallback_out.stdout);
     } else if vf != "scale=480:-2" {
         // Fallback without LUT if filter failed
         let mut simple_cmd = Command::new("ffmpeg");
@@ -110,8 +122,32 @@ pub fn extract_thumbnail<P: AsRef<Path>>(
                 return Ok(simple_out.stdout);
             }
         }
-        Err(format!("Could not extract thumbnail from {:?}", path))
-    } else {
-        Err(format!("Could not extract thumbnail from {:?}", path))
+    }
+
+    // Last-resort fallback: try OS shell thumbnail extraction
+    #[cfg(windows)]
+    {
+        if let Ok(bytes) = crate::media::os_thumb::extract_os_thumbnail(path, 480, 270) {
+            return Ok(bytes);
+        }
+    }
+
+    Err(format!("Could not extract thumbnail from {:?}", path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_thumbnail_braw() {
+        let braw = Path::new("P:\\VideoRepo\\BMPCC\\2026-01-21\\A009_03112214_C001.braw");
+        if braw.exists() {
+            let res = extract_thumbnail(braw, 88.0, None);
+            assert!(res.is_ok(), "Thumbnail extraction for BRAW should succeed: {:?}", res.err());
+            let bytes = res.unwrap();
+            assert!(!bytes.is_empty());
+            assert_eq!(&bytes[0..2], &[0xFF, 0xD8]);
+        }
     }
 }

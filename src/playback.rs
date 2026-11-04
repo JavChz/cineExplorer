@@ -109,8 +109,13 @@ impl VideoPlayer {
             last_seek_requested: -1.0,
         };
 
-        // Immediately start playback of the clip
-        player.play();
+        // For BRAW files, immediately load the native high-res OS frame
+        if player.clip.is_braw() {
+            player.request_single_frame(0.0);
+        } else {
+            // Immediately start playback of the clip
+            player.play();
+        }
         player
     }
 
@@ -140,6 +145,12 @@ impl VideoPlayer {
     }
 
     pub fn play(&mut self) {
+        if self.clip.is_braw() {
+            // Launch in the official Blackmagic RAW Player or external player
+            let _ = open::that(&self.clip.file_path);
+            return;
+        }
+
         let end_sec = self.out_point.unwrap_or(self.clip.duration_seconds).max(0.1);
         let start_sec = self.in_point.unwrap_or(0.0);
 

@@ -181,33 +181,41 @@ fn linear_to_rec709_oetf(linear: f32) -> f32 {
     }
 }
 
-/// Filmic S-curve tone mapping to gracefully compress HDR camera sensor highlights into SDR 0..1
+/// Filmic highlight shoulder: preserves linear midtones exactly up to knee (0.65),
+/// then smoothly rolls off high-dynamic-range highlights to SDR peak white (1.0).
 #[inline]
-fn tone_map_highlight_shoulder(linear: f32, max_white: f32) -> f32 {
+fn tone_map_highlight_shoulder(linear: f32, _max_white: f32) -> f32 {
     if linear <= 0.0 {
         return 0.0;
     }
-    // Reinhard-style shoulder with linear mid-tones and gentle rolloff
-    let x = linear / max_white;
-    let shoulder = (x * (1.0 + x / 4.0)) / (1.0 + x);
-    shoulder.min(1.0)
+    const KNEE: f32 = 0.65;
+    if linear <= KNEE {
+        linear
+    } else {
+        const W: f32 = 1.0 - KNEE;
+        let delta = linear - KNEE;
+        KNEE + W * (delta / (delta + W))
+    }
 }
 
 /// Convert a normalized Canon C-Log3 sample (0..1) to linear sensor reflection
+#[allow(clippy::excessive_precision)]
 fn canon_clog3_to_linear(y: f32) -> f32 {
-    if y >= 0.109961 {
-        let p = (y - 0.42012) / 0.263319;
-        (10.0f32.powf(p) - 1.0) / 14.1599
+    let out = if y < 0.097465473 {
+        -(10.0f32.powf((0.12783901 - y) / 0.36726845) - 1.0) / 14.98325
+    } else if y <= 0.15277891 {
+        (y - 0.12512219) / 1.9754798
     } else {
-        (y - 0.092864).max(0.0) / 14.9832
-    }
+        (10.0f32.powf((y - 0.12240537) / 0.36726845) - 1.0) / 14.98325
+    };
+    out.max(0.0)
 }
 
 /// Convert a normalized Canon C-Log2 sample (0..1) to linear sensor reflection
 fn canon_clog2_to_linear(y: f32) -> f32 {
     if y >= 0.06731 {
         let p = (y - 0.618353) / 0.281863;
-        10.0f32.powf(p) - 0.007812
+        (10.0f32.powf(p) - 0.007812).max(0.0)
     } else {
         (y - 0.035388).max(0.0) / 8.729
     }
@@ -215,11 +223,11 @@ fn canon_clog2_to_linear(y: f32) -> f32 {
 
 /// Convert a normalized Canon original C-Log sample (0..1) to linear sensor reflection
 fn canon_clog_to_linear(y: f32) -> f32 {
-    if y > 0.1278 {
-        let p = (y - 0.529136) / 0.529136;
-        10.0f32.powf(p) - 0.073059
+    if y > 0.127839 {
+        let p = (y - 0.0730597) / 0.529136;
+        ((10.0f32.powf(p) - 1.0) / 10.1596).max(0.0)
     } else {
-        (y - 0.073059).max(0.0) / 10.844
+        (y - 0.0730597).max(0.0) / 10.844
     }
 }
 
@@ -248,8 +256,8 @@ fn sony_slog2_to_linear(y: f32) -> f32 {
 fn panasonic_vlog_to_linear(y: f32) -> f32 {
     let cut = 0.181;
     if y >= cut {
-        let p = (y - 0.423) / 0.263;
-        10.0f32.powf(p) - 0.0075
+        let p = (y - 0.598206) / 0.241514;
+        (10.0f32.powf(p) - 0.00873).max(0.0)
     } else {
         (y - 0.125).max(0.0) / 5.6
     }
@@ -465,7 +473,7 @@ pub fn generate_cube_lut(profile: LogProfile, output_path: &Path) -> std::io::Re
     let mut file = File::create(output_path)?;
     let lut_size = 33usize;
 
-    writeln!(file, "# cineExplorer Log to Rec.709 3D LUT")?;
+    writeln!(file, "# cineExplorer Log to Rec.709 3D LUT v2")?;
     writeln!(file, "# Profile: {}", profile.display_name())?;
     writeln!(file, "LUT_3D_SIZE {}", lut_size)?;
     writeln!(file, "DOMAIN_MIN 0.0 0.0 0.0")?;
@@ -494,8 +502,15 @@ pub fn get_or_create_lut_file(profile: LogProfile) -> Option<PathBuf> {
     if profile == LogProfile::None {
         return None;
     }
-    let filename = format!("{}_to_rec709.cube", profile.as_str());
-    let lut_path = get_lut_storage_dir().join(filename);
+    let filename = format!("{}_to_rec709_v2.cube", profile.as_str());
+    let lut_dir = get_lut_storage_dir();
+    let lut_path = lut_dir.join(&filename);
+
+    // Clean up legacy v1 LUT file if present
+    let legacy_v1 = lut_dir.join(format!("{}_to_rec709.cube", profile.as_str()));
+    if legacy_v1.exists() {
+        let _ = std::fs::remove_file(legacy_v1);
+    }
 
     if !lut_path.exists() {
         let _ = generate_cube_lut(profile, &lut_path);
@@ -567,5 +582,21 @@ mod tests {
         let p = Path::new("C:\\Users\\test\\cineExplorer\\luts\\lut.cube");
         let esc = escape_ffmpeg_filter_path(p);
         assert_eq!(esc, "C\\:/Users/test/cineExplorer/luts/lut.cube");
+    }
+
+    #[test]
+    fn test_canon_clog3_middle_gray() {
+        // Canon Log 3 18% middle gray sits around 0.343 code value / IRE
+        let (r, g, b) = transform_log_to_rec709(LogProfile::CanonLog3, 0.343, 0.343, 0.343);
+        // In standard Rec.709 display space, 18% middle gray should be ~40% - 46% IRE (approx 0.43)
+        assert!((0.38..=0.46).contains(&r), "Expected C-Log3 18% gray ~0.43, got {}", r);
+        assert!((r - g).abs() < 0.001);
+        assert!((g - b).abs() < 0.001);
+
+        // Diffuse white (~0.60 code value in C-Log3) should be bright ~0.90+
+        let (wr, wg, wb) = transform_log_to_rec709(LogProfile::CanonLog3, 0.60, 0.60, 0.60);
+        assert!((0.85..=0.98).contains(&wr), "Expected C-Log3 diffuse white ~0.93, got {}", wr);
+        assert!((wr - wg).abs() < 0.001);
+        assert!((wg - wb).abs() < 0.001);
     }
 }

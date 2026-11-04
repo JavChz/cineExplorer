@@ -78,14 +78,23 @@ pub struct VideoRecord {
 
 impl VideoRecord {
     pub fn slate_label(&self) -> Option<String> {
+        fn is_valid_slate_val(s: &str) -> bool {
+            let t = s.trim();
+            !t.is_empty()
+                && !t.eq_ignore_ascii_case("none")
+                && !t.eq_ignore_ascii_case("null")
+                && !t.eq_ignore_ascii_case("n/a")
+                && !t.eq_ignore_ascii_case("undefined")
+        }
+
         let mut parts = Vec::new();
-        if !self.scene.trim().is_empty() {
+        if is_valid_slate_val(&self.scene) {
             parts.push(format!("Sc {}", self.scene.trim()));
         }
-        if !self.shot.trim().is_empty() {
+        if is_valid_slate_val(&self.shot) {
             parts.push(format!("Sh {}", self.shot.trim()));
         }
-        if !self.take.trim().is_empty() {
+        if is_valid_slate_val(&self.take) {
             parts.push(format!("Tk {}", self.take.trim()));
         }
         if parts.is_empty() {
@@ -212,6 +221,12 @@ impl VideoRecord {
         } else {
             format!("{:.0} Kbps", (self.bitrate as f64) / 1000.0)
         }
+    }
+
+    pub fn is_braw(&self) -> bool {
+        self.container.eq_ignore_ascii_case("braw")
+            || self.codec.to_lowercase().contains("braw")
+            || self.file_name.to_lowercase().ends_with(".braw")
     }
 }
 
